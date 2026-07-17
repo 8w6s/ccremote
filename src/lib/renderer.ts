@@ -587,10 +587,15 @@ export class Renderer {
     if (completedToolKeys.has(sharedKey) || finalizingToolKeys.has(sharedKey)) return;
     finalizingToolKeys.add(sharedKey);
 
-    const meta = this.toolMeta.get(toolUseId) ?? liveToolMeta.get(sharedKey);
+    let meta = this.toolMeta.get(toolUseId) ?? liveToolMeta.get(sharedKey);
     const msg = this.toolMessages.get(toolUseId)
       ?? liveToolMessages.get(sharedKey)
       ?? await waitForToolMessage(this.channel.id, toolUseId);
+    // The result stream can arrive before the aggregate assistant tool_use
+    // event. `waitForToolMessage` closes that race for the Discord card, but
+    // the matching metadata may have been registered during the same wait.
+    // Refresh it so the completed card keeps paths, commands, and subtext.
+    meta ??= this.toolMeta.get(toolUseId) ?? liveToolMeta.get(sharedKey);
     const duration = meta ? Date.now() - meta.startedAt : undefined;
     const target = this.sendTargetFor(parentToolUseId);
 

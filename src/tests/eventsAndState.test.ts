@@ -58,6 +58,28 @@ test('tool result from a second renderer edits the original running card', async
   assert.equal(edits, 1);
 });
 
+test('tool result keeps Read path when tool metadata arrives during correlation wait', async () => {
+  let editedPayload = '';
+  const message = {
+    edit: async (payload: unknown) => { editedPayload = JSON.stringify(payload); },
+  };
+  const channel = {
+    id: 'late-read-metadata-channel',
+    send: async () => message,
+  } as unknown as SessionChannel;
+  const resultRenderer = new Renderer(channel);
+  const useRenderer = new Renderer(channel);
+
+  const resultPromise = resultRenderer.onToolResult('late-read-tool-id', 'file contents', false);
+  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  await useRenderer.onToolUse('late-read-tool-id', 'Read', {
+    file_path: '/workspace/src/index.ts',
+  });
+  await resultPromise;
+
+  assert.match(editedPayload, /\/workspace\/src\/index\.ts/);
+});
+
 test('retry, rate-limit, and background status components update in place', async () => {
   let sends = 0;
   let edits = 0;
