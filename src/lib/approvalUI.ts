@@ -12,7 +12,7 @@ import {
   StringSelectMenuBuilder,
 } from 'discord.js';
 import { V2_FLAGS } from './v2';
-import { scrub } from './scrubber';
+import { escapeCodeFences, scrub } from './scrubber';
 import { log } from './logger';
 
 /**
@@ -50,6 +50,10 @@ function sepSmall(divider = true): SeparatorBuilder {
 function safe(t: string, max = 1600): string {
   const s = scrub(t);
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+function safeCode(t: string, max = 1600): string {
+  return escapeCodeFences(safe(t, max));
 }
 
 function optionLabel(label: string): { text: string; recommended: boolean } {
@@ -115,19 +119,19 @@ export async function renderBashApproval(
     fullDiff = diff;
     const changeKind = oldText.length === 0 ? 'add' : newText.length === 0 ? 'delete' : 'change';
     c.addTextDisplayComponents(td(`-# Change type: **${changeKind}**`));
-    c.addTextDisplayComponents(td(`\`\`\`diff\n${safe(diff, 2600)}\n\`\`\``));
+    c.addTextDisplayComponents(td(`\`\`\`diff\n${safeCode(diff, 2600)}\n\`\`\``));
   } else if (isWrite) {
     if (filePath) c.addTextDisplayComponents(td(`**File:** \`${safe(filePath, 300)}\``));
     const content = typeof approval.input.content === 'string' ? approval.input.content : '';
     fullDiff = content.split('\n').map((line) => `+ ${line}`).join('\n');
     c.addTextDisplayComponents(td('-# Change type: **add/overwrite**'));
-    c.addTextDisplayComponents(td(`\`\`\`diff\n${safe(fullDiff, 2600)}\n\`\`\``));
+    c.addTextDisplayComponents(td(`\`\`\`diff\n${safeCode(fullDiff, 2600)}\n\`\`\``));
   } else if (command) {
-    c.addTextDisplayComponents(td(`\`\`\`bash\n${safe(command, 1500)}\n\`\`\``));
+    c.addTextDisplayComponents(td(`\`\`\`bash\n${safeCode(command, 1500)}\n\`\`\``));
   } else {
     const input = JSON.stringify(approval.input, null, 2);
     c.addTextDisplayComponents(
-      td(`\`\`\`json\n${safe(input, 1500)}\n\`\`\``),
+      td(`\`\`\`json\n${safeCode(input, 1500)}\n\`\`\``),
     );
   }
   if (reason) {

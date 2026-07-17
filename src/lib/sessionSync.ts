@@ -1,5 +1,5 @@
 import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { allocateSequence, bootstrapSequences, formatSequence } from './sequenceRegistry';
@@ -18,6 +18,7 @@ import {
 } from './state';
 import { jsonlMirror } from './jsonlMirror';
 import { log } from './logger';
+import { resolveAllowedCwd } from './pathPolicy';
 
 export interface DiscoveredSession {
   uuid: string;
@@ -41,7 +42,7 @@ export function metadataFromJsonl(path: string): { cwd: string | null; timestamp
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line) as Record<string, unknown>;
-        const cwd = typeof event.cwd === 'string' && event.cwd.startsWith('/') ? event.cwd : null;
+        const cwd = typeof event.cwd === 'string' && isAbsolute(event.cwd) ? event.cwd : null;
         const rawTimestamp = event.timestamp;
         const timestamp = typeof rawTimestamp === 'string' || typeof rawTimestamp === 'number'
           ? new Date(rawTimestamp).getTime()
@@ -80,7 +81,12 @@ export function discoverClaudeSessions(): DiscoveredSession[] {
     }
     for (const name of names) {
       const path = join(projectDir, name);
-      const stat = statSync(path);
+      let stat;
+      try {
+        stat = statSync(path);
+      } catch {
+        continue; // The transcript may disappear during discovery.
+      }
       const metadata = metadataFromJsonl(path);
       if (!metadata.cwd) continue;
       const cwd = metadata.cwd;
@@ -157,7 +163,7 @@ function enqueueReplay(task: () => Promise<void>): void {
 }
 
 function allowedCwd(cwd: string): boolean {
-  return config.allowedCwdPrefixes.some((prefix) => cwd === prefix || cwd.startsWith(`${prefix}/`));
+  return resolveAllowedCwd(cwd) !== null;
 }
 
 export async function createSyncedSession(
@@ -278,7 +284,15 @@ export async function resumeIncompleteSyncs(client: Client): Promise<number> {
       updateSessionMappingHealth(row.channelId, 'stale');
       continue;
     }
-    const stat = statSync(row.jsonlPath);
+    let stat;
+    try {
+      stat = statSync(row.jsonlPath);
+    } catch {
+      // The file can be rotated or deleted after existsSync but before stat.
+      updateSessionMappingHealth(row.channelId, 'missing-jsonl');
+      updateSessionSyncProgress(row.channelId, row.syncCheckpoint ?? 0, row.syncTotal ?? 0, 'error');
+      continue;
+    }
     const textChannel = channel as TextChannel;
     const recent = await textChannel.messages.fetch({ limit: 50 }).catch(() => null);
     let progress = recent?.find((message) =>

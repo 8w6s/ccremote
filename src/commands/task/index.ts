@@ -5,6 +5,7 @@ import { getTasks, hydrateTasksFromJsonl } from '../../lib/taskStore';
 import { replyV2, v2Panel } from '../../lib/v2';
 import { getSession } from '../../lib/state';
 import { existsSync } from 'node:fs';
+import { scrub } from '../../lib/scrubber';
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -23,8 +24,9 @@ const command: Command = {
       ? '_Claude has not created any tasks in the current runtime._'
       : tasks.map((task) => {
           const icon = task.status === 'completed' ? '☑' : task.status === 'in_progress' ? '⏳' : '☐';
-          const detail = task.description ? `\n  -# ${task.description.slice(0, 220)}` : '';
-          return `${icon} **${task.content}**${detail}`;
+          const content = scrub(task.content).slice(0, 300);
+          const detail = task.description ? `\n  -# ${scrub(task.description).slice(0, 220)}` : '';
+          return `${icon} **${content}**${detail}`;
         }).join('\n');
     await replyV2(interaction, v2Panel({ title: '📋 Claude tasks', body }), { ephemeral: true });
   },

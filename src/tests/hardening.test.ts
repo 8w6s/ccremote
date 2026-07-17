@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalMcpServer, isLoopbackAddress } from '../lib/approvalMcpServer';
@@ -9,6 +9,15 @@ import { resetSessionForCwdChange, SessionState } from '../lib/state';
 import { registerSecret, scrub } from '../lib/scrubber';
 import { Bridge } from '../lib/bridge';
 import { readUserPromptsFromPath } from '../lib/rewind';
+import { canPermanentlyDelete, isAuthorizedUser } from '../lib/authorization';
+import { OverwriteType, PermissionsBitField } from 'discord.js';
+import {
+  commitTranscriptDeletion,
+  rollbackTranscriptDeletion,
+  stageTranscriptDeletion,
+} from '../lib/transcriptDeletion';
+import { clearTasks, getTasks, hydrateTasksFromJsonl } from '../lib/taskStore';
+import { sanitizeLogValue } from '../lib/logger';
 
 test('cwd rotation clears every transcript and mirror identity field', () => {
   const session = {
@@ -42,6 +51,7 @@ test('cwd rotation clears every transcript and mirror identity field', () => {
 
 test('Claude project encoding and JSONL path share one canonical policy', () => {
   assert.equal(encodeClaudeCwd('/home/example/project'), '-home-example-project');
+  assert.equal(encodeClaudeCwd('C:\\Users\\example\\project'), 'C--Users-example-project');
   assert.match(
     claudeSessionJsonlPath('/home/example/project', 'session-id'),
     /\.claude[\\/]projects[\\/]-home-example-project[\\/]session-id\.jsonl$/,
@@ -150,4 +160,70 @@ test('rewind streams JSONL and excludes tool-result user records', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('explicit member handoff permissions authorize only that Discord user', () => {
+  const allowed = new PermissionsBitField([
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.SendMessages,
+  ]);
+  const channel = {
+    permissionOverwrites: {
+      cache: new Map([
+        ['handoff-user', { type: OverwriteType.Member, allow: allowed }],
+      ]),
+    },
+  };
+  assert.equal(isAuthorizedUser('handoff-user', channel), true);
+  assert.equal(isAuthorizedUser('different-user', channel), false);
+  assert.equal(canPermanentlyDelete('handoff-user'), false);
+});
+
+test('staged transcript deletion rolls back or commits without losing the original early', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clauderemote-delete-'));
+  const transcript = join(dir, 'session.jsonl');
+  try {
+    writeFileSync(transcript, 'important transcript');
+    const rollback = stageTranscriptDeletion(transcript);
+    assert.ok(rollback);
+    assert.equal(existsSync(transcript), false);
+    rollbackTranscriptDeletion(rollback);
+    assert.equal(readFileSync(transcript, 'utf8'), 'important transcript');
+
+    const commit = stageTranscriptDeletion(transcript);
+    assert.ok(commit);
+    commitTranscriptDeletion(commit);
+    assert.equal(existsSync(transcript), false);
+    assert.equal(existsSync(commit.quarantinePath), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('clearing a task cache cancels an in-flight JSONL hydration', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'clauderemote-task-hydrate-'));
+  const transcript = join(dir, 'session.jsonl');
+  const channelId = 'deleted-channel';
+  const event = JSON.stringify({
+    message: {
+      content: [{ type: 'tool_use', id: 'task-1', name: 'TaskCreate', input: { subject: 'stale' } }],
+    },
+  });
+  try {
+    writeFileSync(transcript, `${event}\n`.repeat(2_000));
+    const hydration = hydrateTasksFromJsonl(channelId, transcript);
+    clearTasks(channelId);
+    await hydration;
+    assert.deepEqual(getTasks(channelId), []);
+  } finally {
+    clearTasks(channelId);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('logger output scrubs secrets in strings, errors, and structured values', () => {
+  const secret = 'sk-ant-abcdefghijklmnopqrstuvwxyz123456';
+  assert.doesNotMatch(sanitizeLogValue(`failed with ${secret}`), /sk-ant-/);
+  assert.doesNotMatch(sanitizeLogValue(new Error(`failed with ${secret}`)), /sk-ant-/);
+  assert.doesNotMatch(sanitizeLogValue({ authorization: `Bearer ${secret}` }), /sk-ant-/);
 });

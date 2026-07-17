@@ -8,7 +8,7 @@ import { BotEvent } from '../types';
 import { config } from '../config';
 import { createSessionChannel } from '../lib/hub';
 import { v2Error, v2Info, v2Ok, V2_FLAGS_EPHEMERAL } from '../lib/v2';
-import { isTeamMember } from '../lib/team';
+import { isAuthorizedUser } from '../lib/authorization';
 import { log } from '../lib/logger';
 import { ExtendedClient } from '../types';
 import { bridge } from '../lib/bridge';
@@ -41,7 +41,7 @@ const event: BotEvent<'interactionCreate'> = {
       return;
     }
     // Auth: owner OR team member.
-    if ('user' in interaction && interaction.user.id !== config.ownerId && !isTeamMember(interaction.user.id)) {
+    if ('user' in interaction && !isAuthorizedUser(interaction.user.id, interaction.channel)) {
       if (interaction.isRepliable()) {
         await interaction
           .reply({
@@ -185,7 +185,7 @@ const event: BotEvent<'interactionCreate'> = {
         if (action === 'qsubmit') {
           const ok = await submitQuestionApproval(requestId);
           if (ok) await interaction.deferUpdate().catch(() => {});
-          else await interaction.reply({ components: [v2Error('⚠ Please answer every question.')], flags: V2_FLAGS_EPHEMERAL }).catch(() => {});
+          else await interaction.reply({ components: [v2Error('⚠ This form is no longer pending.')], flags: V2_FLAGS_EPHEMERAL }).catch(() => {});
           return;
         }
 

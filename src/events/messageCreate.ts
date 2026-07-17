@@ -7,10 +7,10 @@ import { bridge } from '../lib/bridge';
 import { v2Error, V2_FLAGS } from '../lib/v2';
 import { fetchReplyContext } from '../lib/replyContext';
 import { downloadAttachments, DownloadResult } from '../lib/attachments';
-import { isTeamMember } from '../lib/team';
 import { normalizeDiscordRequest } from '../lib/inputNormalizer';
 import { isKnownSessionCategory, isLiveSessionCategory } from '../lib/sessionCategories';
 import { log } from '../lib/logger';
+import { isAuthorizedUser } from '../lib/authorization';
 
 let warnedAboutMessageDeleteFailure = false;
 
@@ -32,9 +32,8 @@ const event: BotEvent<'messageCreate'> = {
     if (!message.inGuild()) return;
     if (message.guildId !== config.guildId) return;
 
-    if (message.author.id !== config.ownerId && !isTeamMember(message.author.id)) return;
-
     const ch = message.channel;
+    if (!isAuthorizedUser(message.author.id, ch)) return;
 
     // A session channel is a mapped GuildText in the active/archive category.
     let sessionChannel: TextChannel | null = null;

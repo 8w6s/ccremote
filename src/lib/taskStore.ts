@@ -9,6 +9,7 @@ interface StoredTask extends TodoItem {
 
 const tasksByChannel = new Map<string, Map<string, StoredTask>>();
 const hydrateInflight = new Map<string, Promise<void>>();
+const taskEpoch = new Map<string, number>();
 
 function store(channelId: string): Map<string, StoredTask> {
   let tasks = tasksByChannel.get(channelId);
@@ -77,13 +78,24 @@ export function getTasks(channelId: string): StoredTask[] {
   return [...(tasksByChannel.get(channelId)?.values() ?? [])];
 }
 
+export function clearTasks(channelId: string): void {
+  tasksByChannel.delete(channelId);
+  hydrateInflight.delete(channelId);
+  taskEpoch.set(channelId, (taskEpoch.get(channelId) ?? 0) + 1);
+}
+
 export async function hydrateTasksFromJsonl(channelId: string, jsonlPath: string): Promise<void> {
   const existing = hydrateInflight.get(channelId);
   if (existing) return existing;
+  const epoch = taskEpoch.get(channelId) ?? 0;
   const promise = (async () => {
     const pendingCreates = new Set<string>();
     const lines = createInterface({ input: createReadStream(jsonlPath), crlfDelay: Infinity });
     for await (const line of lines) {
+      if ((taskEpoch.get(channelId) ?? 0) !== epoch) {
+        lines.close();
+        return;
+      }
       if (!line.trim()) continue;
       let event: Record<string, unknown>;
       try { event = JSON.parse(line) as Record<string, unknown>; } catch { continue; }

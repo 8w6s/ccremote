@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, ChannelType, TextChannel } from 'discord.js';
-import { unlinkSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { Command } from '../../types';
 import { v2Error, v2Ok, replyV2 } from '../../lib/v2';
 import { getSession, deleteSession, setSessionDeleting } from '../../lib/state';
@@ -9,6 +9,14 @@ import { jsonlMirror } from '../../lib/jsonlMirror';
 import { approvalMcpServer } from '../../lib/approvalMcpServer';
 import { log } from '../../lib/logger';
 import { claudeSessionJsonlPath } from '../../lib/claudePaths';
+import { clearTasks } from '../../lib/taskStore';
+import {
+  commitTranscriptDeletion,
+  rollbackTranscriptDeletion,
+  stageTranscriptDeletion,
+  StagedTranscriptDeletion,
+} from '../../lib/transcriptDeletion';
+import { canPermanentlyDelete } from '../../lib/authorization';
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -19,6 +27,12 @@ const command: Command = {
       .setDescription('Confirm permanent deletion')
       .setRequired(true)),
   async execute(interaction) {
+    if (!canPermanentlyDelete(interaction.user.id)) {
+      await replyV2(interaction, v2Error('❌ Only the owner may permanently delete a session.'), {
+        ephemeral: true,
+      });
+      return;
+    }
     if (!interaction.options.getBoolean('confirm', true)) {
       await replyV2(interaction, v2Error('Deletion cancelled.'), { ephemeral: true });
       return;
@@ -55,16 +69,16 @@ const command: Command = {
       /* ignore */
     }
 
-    let jsonlDeleted = false;
+    let jsonlPath: string | null = null;
+    let stagedJsonl: StagedTranscriptDeletion | null = null;
     let jsonlDeleteError: string | null = null;
     if (session.sessionUuid) {
       // Never trust a persisted path for destructive deletion. Recompute the
       // only valid target from the mapped cwd and UUID.
-      const jsonlPath = claudeSessionJsonlPath(session.cwd, session.sessionUuid);
+      jsonlPath = claudeSessionJsonlPath(session.cwd, session.sessionUuid);
       try {
         if (existsSync(jsonlPath)) {
-          unlinkSync(jsonlPath);
-          jsonlDeleted = true;
+          stagedJsonl = stageTranscriptDeletion(jsonlPath);
         }
       } catch (err) {
         jsonlDeleteError = err instanceof Error ? err.message : String(err);
@@ -92,17 +106,40 @@ const command: Command = {
 
     // 5. Reply before deleting the channel so Discord can acknowledge the command.
     const parts: string[] = ['🗑 Session permanently deleted'];
-    if (jsonlDeleted) parts.push('local JSONL removed');
+    if (stagedJsonl) parts.push('local JSONL staged for removal');
     if (cleaned > 0) parts.push(`removed ${cleaned} upload files`);
     parts.push('deleting the Discord channel');
-    await replyV2(interaction, v2Ok(parts.join(' · ') + '.'));
-
-    // 6. Remove the mapping only after Discord confirms deletion. On failure,
-    // clear the marker and retain the mapping so the operation can be retried.
+    // 6. Remove the mapping only after Discord confirms deletion. Replying is
+    // part of the same rollback boundary: a Discord API failure must never
+    // leave the transcript stranded in quarantine.
     try {
+      await replyV2(interaction, v2Ok(parts.join(' · ') + '.'));
       await channel.delete('clauderemote /delete session');
+      if (stagedJsonl) {
+        try {
+          commitTranscriptDeletion(stagedJsonl);
+        } catch (err) {
+          // The channel and mapping are gone, but the quarantined transcript
+          // remains recoverable instead of risking deletion of another file.
+          log.warn(
+            `/delete: Discord channel deleted but quarantined JSONL remains at ${stagedJsonl.quarantinePath}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
       deleteSession(channel.id);
+      clearTasks(channel.id);
     } catch (err) {
+      if (stagedJsonl) {
+        try {
+          rollbackTranscriptDeletion(stagedJsonl);
+        } catch (restoreErr) {
+          log.err(
+            `/delete: CRITICAL — failed to restore quarantined JSONL ${stagedJsonl.quarantinePath}:`,
+            restoreErr instanceof Error ? restoreErr.message : restoreErr,
+          );
+        }
+      }
       setSessionDeleting(channel.id, false);
       log.warn('/delete: Discord channel deletion failed:', err instanceof Error ? err.message : err);
     }

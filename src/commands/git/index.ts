@@ -4,6 +4,7 @@ import { Command } from '../../types';
 import { v2Error, replyV2, v2Info, followUpV2 } from '../../lib/v2';
 import { getSession } from '../../lib/state';
 import { requireSessionChannel } from '../../lib/sessionGuard';
+import { escapeCodeFences, scrub } from '../../lib/scrubber';
 
 const SUBS = ['status', 'diff', 'log', 'branch'] as const;
 type Sub = (typeof SUBS)[number];
@@ -54,7 +55,7 @@ const command: Command = {
     const sub = interaction.options.getString('cmd', true) as Sub;
     await interaction.deferReply({ ephemeral: false } as never).catch(() => {});
     const { code, out } = await runGit(session.cwd, SUB_ARGS[sub]);
-    const body = out.slice(0, 3600);
+    const body = escapeCodeFences(scrub(out)).slice(0, 3600);
     await followUpV2(
       interaction,
       v2Info(

@@ -14,6 +14,8 @@ import {
 import { getSession } from './state';
 import { log } from './logger';
 import { waitForToolMessage } from './renderer';
+import { randomUUID } from 'node:crypto';
+import { escapeCodeFences, scrub } from './scrubber';
 
 /**
  * Correlates Claude MCP permission requests with Discord interactions.
@@ -81,8 +83,9 @@ export async function requestApproval(
   }
   const target = ch as TextChannel | ThreadChannel;
 
-  const requestId = args.tool_use_id ?? `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const inflightKey = `${channelId}:${requestId}`;
+  const correlationId = args.tool_use_id ?? randomUUID();
+  const requestId = randomUUID();
+  const inflightKey = `${channelId}:${correlationId}`;
   const duplicate = inflightByTool.get(inflightKey);
   if (duplicate) return duplicate;
   log.dim(`requestApproval[${channelId}] ${args.tool_name} id=${requestId}`);
@@ -93,7 +96,9 @@ export async function requestApproval(
       if (resolved) return;
       resolved = true;
       pending.delete(requestId);
-      byChannel.get(channelId)?.delete(requestId);
+      const channelQueue = byChannel.get(channelId);
+      channelQueue?.delete(requestId);
+      if (channelQueue?.size === 0) byChannel.delete(channelId);
       inflightByTool.delete(inflightKey);
       if (entry.timeout) clearTimeout(entry.timeout);
       resolve(d);
@@ -388,7 +393,7 @@ export function getApproval(requestId: string):
 export async function explainApproval(requestId: string): Promise<string | null> {
   const p = pending.get(requestId);
   if (!p) return null;
-  const inputStr = JSON.stringify(p.args.input, null, 2);
+  const inputStr = escapeCodeFences(scrub(JSON.stringify(p.args.input, null, 2)));
   return `**Tool:** \`${p.args.tool_name}\`\n**Input:**\n\`\`\`json\n${inputStr.slice(0, 1500)}\n\`\`\``;
 }
 

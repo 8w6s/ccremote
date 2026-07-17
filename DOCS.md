@@ -418,7 +418,7 @@ Valid only for a closed mapped session. It moves the channel back to the active 
 
 ### `/delete confirm:true`
 
-Permanently deletes the exact mapped JSONL, state mapping, temporary files, watcher, approval endpoint registration, Runner, and Discord channel. It uses a durable deletion state machine so partial failure is retryable. It never derives a different UUID or deletes a sibling transcript. `confirm:false` performs no mutation.
+Owner-only. Permanently deletes the exact mapped JSONL, state mapping, temporary files, watcher, approval endpoint registration, Runner, and Discord channel. The transcript is first moved atomically to a unique quarantine name. It is restored if the Discord reply or channel deletion fails, and removed only after Discord confirms deletion. This makes partial failure retryable without losing the transcript early. It never derives a different UUID or deletes a sibling transcript. `confirm:false` performs no mutation.
 
 ### `/rename name:<value>`
 
@@ -553,7 +553,7 @@ Owner-only allowlist management. Members gain permission to use the bot but cann
 
 ### `/handoff user:<user>`
 
-Grants an authorized user access to the relevant Discord channel according to the configured team/channel policy. It does not transfer session ownership or expose other channels.
+Creates an explicit member overwrite for the relevant Discord channel. That overwrite is recognized by the application authorization layer, so the recipient can send prompts and use controls only in the handed-off channel without joining the global team allowlist. It does not transfer session ownership or expose other channels; removing the overwrite revokes access.
 
 ### `/notify`
 
@@ -591,8 +591,9 @@ Select menus paginate beyond 25 options. Action rows never exceed five component
 - Leave every guild other than `GUILD_ID` immediately when Discord emits `guildCreate`.
 - Reconcile the guild cache at startup and leave unauthorized guilds added while the bot was offline.
 - Disable **Public Bot** in Discord Developer Portal when private installation is required. Runtime departure is defense in depth, not an OAuth invitation blocker.
-- Require owner or team membership for messages, slash commands, autocomplete, buttons, selects, and modals.
+- Require owner, team membership, or an explicit per-channel `/handoff` member overwrite for messages, slash commands, autocomplete, buttons, selects, and modals.
 - Owner-only operations include team administration and any future global destructive command.
+- Permanent `/delete` is owner-only, including for team members and `/handoff` recipients.
 - Canonicalize cwd and enforce configured roots against symlink escapes.
 - Use `spawn` argument arrays; never interpolate untrusted input into a shell.
 - Scrub secrets before Discord rendering and logs.
