@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { formatSequence } from '../../lib/sequenceRegistry';
+import { isLiveSessionCategory } from '../../lib/sessionCategories';
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -16,7 +17,11 @@ const command: Command = {
   async execute(interaction) {
     const ch = interaction.channel;
     const isSessionChannel =
-      ch?.type === ChannelType.GuildText && ch.parentId === config.categoryId;
+      ch?.type === ChannelType.GuildText &&
+      isLiveSessionCategory(ch.parentId, {
+        active: config.categoryId,
+        background: config.backgroundCategoryId,
+      });
     if (isSessionChannel && ch) {
       const session = getSession(ch.id);
       if (session) {
@@ -34,6 +39,10 @@ const command: Command = {
             { label: 'Discord channel ID', value: ch.id },
             { label: 'CWD', value: `\`${session.cwd}\`` },
             { label: 'Source', value: session.source ?? 'unknown' },
+            { label: 'Session type', value: session.sessionType ?? 'foreground' },
+            ...(session.sessionType === 'background'
+              ? [{ label: 'Background state', value: session.backgroundStatus ?? 'idle' }]
+              : []),
             { label: 'Created', value: `<t:${Math.floor(session.createdAt / 1000)}:F>` },
             { label: 'Status', value: session.status },
             { label: 'Turns', value: String(session.turnCount) },
@@ -51,6 +60,12 @@ const command: Command = {
             { label: 'Attached', value: runnerAlive ? 'live' : 'offline' },
             { label: 'Current tool', value: runner?.getCurrentTool() ?? 'none' },
             { label: 'Permission mode', value: session.permissionMode ?? 'bypassPermissions' },
+            {
+              label: 'Automatic recap',
+              value: session.recap?.enabled
+                ? `enabled${session.recap.lastGeneratedAt ? ` · last <t:${Math.floor(session.recap.lastGeneratedAt / 1000)}:R>` : ''}`
+                : 'disabled',
+            },
             { label: 'Sync', value: `${session.syncState ?? 'idle'} · ${syncPercent}% · ${syncCheckpoint}/${syncTotal} bytes` },
             { label: 'JSONL', value: session.jsonlPath ? `\`${session.jsonlPath}\` · ${jsonlExists ? 'exists' : 'missing'}` : 'unmapped' },
             { label: 'Mapping health', value: session.mappingHealth ?? 'unknown' },

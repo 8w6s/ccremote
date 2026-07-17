@@ -19,7 +19,7 @@ import { log } from './logger';
  * Discord UI for Claude Code permission requests.
  * permission mode `manual` / `auto` / `plan`.
  *
- * 3 dạng UI (theo mock user cung cấp):
+ * Three UI forms based on the observed Claude Code interactions:
  * - A. **Bash-style approval**: 3 button top-level [Yes / Yes always / No]
  *   implemented through the shared question form below.
  */
@@ -72,7 +72,7 @@ function cwdShort(cwd: string | undefined | null): string {
 }
 
 /**
- * Render approval bubble dạng A (Bash-style).
+ * Render the Bash-style approval bubble.
  *
  * Button customId format: `cr:appr:<requestId>:<action>`
  *   - action: yes | always | no | amend | explain | cancel
@@ -366,6 +366,7 @@ export async function renderRadioApproval(
   approval: PendingApproval,
   question: string,
   options: RadioOption[],
+  toolMessage?: Message | null,
 ): Promise<Message | null> {
   const c = new ContainerBuilder().setAccentColor(COLOR_APPROVAL);
   c.addTextDisplayComponents(td(`## ❓ ${safe(question, 300)}`));
@@ -399,11 +400,16 @@ export async function renderRadioApproval(
   }
 
   try {
-    return await target.send({
+    const payload = {
       components: [c],
       flags: V2_FLAGS,
-      allowedMentions: { parse: [] },
-    });
+      allowedMentions: { parse: [] as never[] },
+    };
+    if (toolMessage) {
+      await toolMessage.edit(payload as unknown as Parameters<Message['edit']>[0]);
+      return toolMessage;
+    }
+    return await target.send(payload as unknown as Parameters<typeof target.send>[0]);
   } catch (err) {
     log.warn(
       'renderRadioApproval fail:',

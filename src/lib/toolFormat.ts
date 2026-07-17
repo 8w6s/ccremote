@@ -129,7 +129,7 @@ export function formatToolUse(name: string, input: Record<string, unknown>): Too
       return { icon: '📤', label: 'ExitPlanMode', primary: 'exit plan' };
     }
     default: {
-      // MCP tool: name = "server:tool" hoặc mcp__server__tool
+      // MCP tool names use either "server:tool" or mcp__server__tool.
       if (name.startsWith('mcp__') || name.includes(':')) {
         const short = name.replace(/^mcp__/, '').replace(/__/g, ':');
         const preview = trunc(JSON.stringify(input ?? {}), 100);

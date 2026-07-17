@@ -49,10 +49,10 @@ const PATTERNS: Array<[RegExp, string]> = [
 /**
  * Init 1 lần ở module load.
  */
-const LITERAL_SECRETS: string[] = [];
+const LITERAL_SECRETS = new Set<string>();
 {
   const push = (v: string | undefined): void => {
-    if (v && v.length >= 12) LITERAL_SECRETS.push(v);
+    if (v && v.length >= 12) LITERAL_SECRETS.add(v);
   };
   push(process.env.ANTHROPIC_AUTH_TOKEN);
   push(process.env.ANTHROPIC_API_KEY);
@@ -63,9 +63,9 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-const LITERAL_RE = LITERAL_SECRETS.length
-  ? new RegExp(LITERAL_SECRETS.map(escapeRegExp).join('|'), 'g')
-  : null;
+export function registerSecret(secret: string | undefined): void {
+  if (secret && secret.length >= 12) LITERAL_SECRETS.add(secret);
+}
 
 /**
  */
@@ -75,7 +75,10 @@ export function escapeCodeFences(s: string): string {
 
 export function scrub(text: string): string {
   let s = text;
-  if (LITERAL_RE) s = s.replace(LITERAL_RE, '[REDACTED:env-secret]');
+  if (LITERAL_SECRETS.size > 0) {
+    const literal = new RegExp([...LITERAL_SECRETS].map(escapeRegExp).join('|'), 'g');
+    s = s.replace(literal, '[REDACTED:env-secret]');
+  }
   for (const [re, sub] of PATTERNS) {
     s = s.replace(re, sub);
   }

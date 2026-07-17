@@ -14,6 +14,7 @@ import { jsonlMirror } from '../lib/jsonlMirror';
 import { approvalMcpServer } from '../lib/approvalMcpServer';
 import { requestApproval, setDiscordClient } from '../lib/approvalRegistry';
 import { bootstrapSessionIdentity, reconcileSessionMappings, resumeIncompleteSyncs } from '../lib/sessionSync';
+import { reconcileAuthorizedGuild } from '../lib/guildGuard';
 
 const event: BotEvent<'clientReady'> = {
   name: 'clientReady',
@@ -21,6 +22,11 @@ const event: BotEvent<'clientReady'> = {
   async execute(client) {
     console.log(chalk.green(`✓ Bot logged in: ${client.user?.tag}`));
     console.log(chalk.gray(`  Guild: ${config.guildId}, Owner: ${config.ownerId}`));
+
+    const unauthorizedGuilds = await reconcileAuthorizedGuild(client);
+    if (unauthorizedGuilds > 0) {
+      log.warn(`Removed the bot from ${unauthorizedGuilds} unauthorized guild(s) during startup.`);
+    }
 
     setDiscordClient(client);
     await approvalMcpServer.start(requestApproval);

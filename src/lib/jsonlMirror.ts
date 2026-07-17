@@ -143,7 +143,7 @@ class JsonlMirror {
     this.entries.set(channelId, entry);
   }
 
-  /** User `/delete` hoặc close → remove watcher. */
+  /** Remove the watcher when the user deletes or closes a session. */
   removeWatcher(channelId: string): void {
     const entry = this.entries.get(channelId);
     if (!entry) return;

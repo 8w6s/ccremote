@@ -394,6 +394,18 @@ All commands are guild-scoped. Except where noted, only the configured owner or 
 
 Creates a new mapped session channel under the active category. It allocates the next stable sequence, persists mapping state, posts a session header, and returns a channel mention. If persistence fails after Discord creation, only the new orphan is rolled back.
 
+### `/background prompt:<task>`
+
+Creates an independent Claude session under `BACKGROUND_CATEGORY_ID`, using the invoking session's cwd when available and `DEFAULT_CWD` otherwise. It allocates a normal stable sequence and Claude UUID, persists the Discord-channel/UUID/JSONL mapping, posts a background header, starts a Runner, and submits the initial task. The created channel remains interactive: authorized messages are ordinary Claude prompts and therefore retain attachments, approvals, streaming, tasks, token accounting, and JSONL mirroring.
+
+This is a Discord-native mapping of Claude Code's background-agent concept, not an unrestricted shell terminal and not a literal terminal detach. Native `/background` frees an interactive terminal by detaching the current session; clauderemote has no occupied terminal to free because every Runner is already remote and asynchronous. A dedicated mapped channel provides the useful semantics: independent progress, steering, stopping, resuming, and transcript ownership.
+
+Creation uses the Discord interaction ID as a durable request identity plus an in-memory singleflight. A repeated delivery reuses the already mapped channel instead of creating another one. If Discord channel creation succeeds but state persistence fails, the new channel is rolled back. If Runner startup fails after persistence, the mapped channel remains available and displays the failure so a later message can retry safely.
+
+Background lifecycle states are `idle`, `running`, `completed`, `stopped`, and `error`. Every prompt moves the state to `running`; a final result moves it to `completed` or `error`. `/stop` terminates the background Runner, records `stopped`, and retains UUID, JSONL, channel, and transcript. A later message lazily resumes the same Claude session. `/open` moves a background channel into the foreground category and converts its session type to foreground.
+
+The category must belong to `GUILD_ID`. When `BACKGROUND_CATEGORY_ID` is absent or invalid, the command fails ephemerally without creating a channel. Category permissions remain Discord's first visibility boundary, while the normal owner/team authorization remains enforced in application code. See [Claude Code commands](https://code.claude.com/docs/en/commands) for the native `/background` behavior.
+
 ### `/close`
 
 Stops the Runner, cancels approvals, marks the session closed, cleans eligible temporary files, prefixes/renames the channel, and moves it to the configured archive category. JSONL and mapping remain. A message in the archived channel or `/open` can reopen it.
@@ -430,6 +442,10 @@ In a session channel, shows sequence, channel ID, UUID, created/last-active time
 
 Canonicalizes symlinks, requires an existing directory inside `ALLOWED_CWD_PREFIXES`, safely stops/reconfigures the Runner, and starts a new session identity for the new project directory on the next prompt.
 
+### `/cd path:<absolute path>`
+
+An exact alias of `/cwd`. Both commands call the same handler, so validation, symlink canonicalization, allowlisted-prefix enforcement, Runner shutdown, UUID reset, and error behavior cannot drift apart. It intentionally does not forward a raw shell `cd` command.
+
 ### `/model model:<name>`
 
 Persists the per-session model override and applies it on the next Runner configuration. Changes during a turn are deferred until the turn completes.
@@ -452,11 +468,29 @@ Requests native Claude context compaction, optionally specifying what the summar
 
 ### `/context`
 
-Requests the detailed native context view only when the configured endpoint is the official Anthropic API. Custom gateways receive an explicit unsupported explanation because their token breakdown cannot be assumed compatible.
+Requests native `/context all`, captures its structured text without also streaming a duplicate raw response, and renders a fixed 50-cell Discord grid. It works with both the official Anthropic endpoint and custom API endpoints because the counts describe the context Claude Code has assembled for the active model; ccRemote does not query the provider for a separate estimate. Skills use alternating `⛀`/`⛁`, all non-skill used context uses alternating `⛂`/`⛃`, and free space uses `⛶`. Shape conveys category even when Discord renders every glyph in the same color. Counts and percentages come from Claude Code's runtime output; ccRemote does not estimate them. Unknown future output formats fall back to a bounded raw warning instead of displaying fabricated numbers.
 
 ### `/usage`
 
-Requests Claude Code's native usage/cost view. Custom gateways may omit or reinterpret pricing, which is disclosed.
+Requests Claude Code's native `/usage` view through the active Runner. Session cost, plan limits, and activity data therefore come directly from the installed CLI rather than a bot-side estimate. Custom gateways may omit or reinterpret pricing, which is disclosed.
+
+### `/login code:<optional>`
+
+Owner-only machine authentication. Without `code`, stops live Runners and starts `claude auth login` with custom API environment variables removed. Stdout and stderr are captured privately until Claude emits an HTTPS OAuth URL; the URL is returned ephemerally and is never posted to the session channel or logs. If the browser displays a code because its callback cannot reach the machine, `/login code:<value>` writes that value to the active login process stdin without echoing it. Exactly one login process may exist, and it is terminated after ten minutes. A successful OAuth login deactivates—but does not erase—the stored custom gateway configuration.
+
+### `/logout`
+
+Owner-only machine-wide logout. Stops all Runners, cancels an active login process, runs `claude auth logout` with gateway credentials removed, applies a 30-second timeout, and preserves every Discord mapping and JSONL transcript. This affects the operating-system account used by all sessions, not only the channel where the command was invoked.
+
+### `/customapi base_url:<url> api_key:<secret> model_ids:<aliases>`
+
+Owner-only gateway configuration. `model_ids` accepts either `opus=<id>,sonnet=<id>,haiku=<id>` or three comma-separated IDs in that order. The URL must be HTTP(S) and cannot contain embedded credentials. The key is never echoed or logged. Configuration is atomically merged into the `env` object in `~/.claude/settings.json`; unrelated Claude settings are preserved and the previous file is backed up as `settings.json.ccremote.bak`. The resulting file is mode `0600`. New Runners also receive the same values in their child environment, so persistent Claude configuration and immediate process configuration agree. Existing Runners are stopped gracefully so their next prompt resumes the same UUID with the new provider.
+
+Because Discord sends slash-command options to the application, the owner should still treat the channel, bot token, process memory, host account, and Discord account as privileged. Ephemeral output prevents ordinary channel disclosure but is not end-to-end secret storage.
+
+### `/credit`
+
+Shows the public project attribution: ccRemote, creator and maintainer `8w6s`, repository [8w6s/ccremote](https://github.com/8w6s/ccremote), and MIT license. It also states that the project is independent and not affiliated with Anthropic.
 
 ### `/btw text:<prompt>`
 
@@ -464,7 +498,7 @@ Sends a normal turn tagged as a visually distinct quick aside. It uses the same 
 
 ### `/stop`
 
-Sends an abort signal to the active Runner turn. It does not fabricate a successful completion mention and does not delete the session.
+For a foreground session, sends an abort signal to the active Runner turn. For a background session, stops the whole Runner while preserving channel, UUID, JSONL, and transcript; the next message resumes it lazily. Neither path fabricates a successful completion mention or deletes the session.
 
 ### `/rewind`
 
@@ -490,9 +524,22 @@ Lists local Claude skills for autocomplete and invokes the selected slash skill 
 
 Reconfigures the CLI process after the current turn so newly edited local skills are loaded by the next Runner.
 
-### `/diff`, `/doctor`, `/init`, `/recap`
+### `/diff`, `/doctor`, `/init`
 
 These forward the corresponding native Claude Code command through the normal session pipeline and render its structured output. They are not reimplemented by clauderemote.
+
+### `/recap [action]`
+
+Actions are `now`, `on`, `off`, and `status`; omitting the action is equivalent to `now`.
+
+- `now` forwards Claude Code's native `/recap` command and renders its one-line session summary.
+- `on` persistently enables clauderemote-managed automatic recap for this session.
+- `off` disables the policy and cancels any pending recap timer on the live Runner.
+- `status` reports the current policy and the most recent automatic recap timestamp.
+
+Claude Code's native `/recap` is an on-demand command. Claude's automatic **Session recap** preference is a separate interactive-terminal feature and is always skipped in non-interactive print mode, which clauderemote uses. The bot therefore implements automatic recap at the Runner boundary. After at least three user turns, a successful ordinary turn starts a three-minute idle debounce. A new prompt cancels the pending timer. When the timer fires, the bot submits native `/recap` internally, renders its output, suppresses the internal command echo and completion mention, and does not schedule another recap from the recap turn itself.
+
+The enabled/disabled preference survives restart. An in-memory idle timer intentionally does not; it is scheduled again after the next successful ordinary turn. This behavior follows the semantics documented in [Claude Code interactive mode](https://code.claude.com/docs/en/interactive-mode) while accounting for non-interactive Runner operation.
 
 ### `/git`
 
@@ -539,6 +586,9 @@ Select menus paginate beyond 25 options. Action rows never exceed five component
 
 - Ignore bot-authored messages.
 - Ignore DMs and all guilds except `GUILD_ID`.
+- Leave every guild other than `GUILD_ID` immediately when Discord emits `guildCreate`.
+- Reconcile the guild cache at startup and leave unauthorized guilds added while the bot was offline.
+- Disable **Public Bot** in Discord Developer Portal when private installation is required. Runtime departure is defense in depth, not an OAuth invitation blocker.
 - Require owner or team membership for messages, slash commands, autocomplete, buttons, selects, and modals.
 - Owner-only operations include team administration and any future global destructive command.
 - Canonicalize cwd and enforce configured roots against symlink escapes.
@@ -609,6 +659,14 @@ Uncaught exceptions must not leave a potentially corrupted process running indef
 
 ## 23. Configuration
 
+### Setup TUI
+
+`setup/setup.py` is the real installer. `setup/demo.py` is a side-effect-free interactive preview that stores answers only in process memory and simulates every install, build, deploy, settings, and daemon action. Root launchers `setup.sh` and `setup.ps1` select an available Python 3 interpreter and execute the real installer. Both Python files use only the standard library; the real TUI hides bot/API secrets with password input, atomically writes `.env`, preserves unrelated Claude settings during gateway merge, and makes all network/install/deploy/daemon actions explicit opt-in questions.
+
+When autostart is selected, setup stages a production runtime outside the source checkout. Linux uses `$XDG_DATA_HOME/ccremote/app` or `~/.local/share/ccremote/app`; macOS uses `~/Library/Application Support/ccRemote/app`; Windows uses `%LOCALAPPDATA%\ccRemote\app`. The staged directory contains compiled `dist`, production dependencies, package metadata, and a private copy of `.env`. systemd, LaunchAgent, or Task Scheduler points to this stable runtime instead of the Git clone. Deployment uses an `app.new` staging directory and an `app.previous` rollback directory so an interrupted update does not leave a half-written application. The source checkout can therefore be deleted after successful installation without breaking the daemon, although it remains useful for updates.
+
+It validates Node/npm, collects Discord identity and category IDs, configures CWD allowlists and runtime limits, optionally configures the Claude gateway, optionally runs npm install and the complete project check, optionally deploys guild commands, and optionally installs user-scoped automatic startup. Generated service definitions use the absolute project and Node paths. Immediate service startup is a separate confirmation from service creation.
+
 Required variables:
 
 - `BOT_TOKEN`
@@ -619,6 +677,8 @@ Required variables:
 - `CATEGORY_ID`
 
 Important optional variables:
+
+- `BACKGROUND_CATEGORY_ID`: category for independently steerable `/background` sessions.
 
 - `ARCHIVE_CATEGORY_ID`
 - `ANTHROPIC_BASE_URL`

@@ -1,7 +1,7 @@
 import { ChannelType, SlashCommandBuilder, TextChannel } from 'discord.js';
 import { Command } from '../../types';
 import { config } from '../../config';
-import { getSession, reopenSession } from '../../lib/state';
+import { getSession, reopenSession, updateSessionType } from '../../lib/state';
 import { moveToActive, renameSessionChannel } from '../../lib/hub';
 import { replyV2, v2Error, v2Info, v2Ok } from '../../lib/v2';
 
@@ -20,6 +20,7 @@ const command: Command = {
     const channel = ch as TextChannel;
     if (
       channel.parentId !== config.categoryId &&
+      channel.parentId !== config.backgroundCategoryId &&
       channel.parentId !== config.archiveCategoryId
     ) {
       await replyV2(interaction, v2Error('❌ This channel is outside the active and archive categories.'), {
@@ -46,6 +47,7 @@ const command: Command = {
       return;
     }
     reopenSession(channel.id);
+    updateSessionType(channel.id, 'foreground');
     await renameSessionChannel(channel, '');
     await replyV2(
       interaction,

@@ -392,7 +392,7 @@ export async function explainApproval(requestId: string): Promise<string | null>
   return `**Tool:** \`${p.args.tool_name}\`\n**Input:**\n\`\`\`json\n${inputStr.slice(0, 1500)}\n\`\`\``;
 }
 
-/** Runner exit → deny hết approval pending của channel. */
+/** Deny every pending approval when the channel Runner exits. */
 export function cleanupChannelApprovals(channelId: string): void {
   const set = byChannel.get(channelId);
   if (!set) return;

@@ -1,7 +1,7 @@
 import { ChannelType, TextChannel, ThreadChannel } from 'discord.js';
 import { BotEvent } from '../types';
 import { config } from '../config';
-import { getSession, reopenSession } from '../lib/state';
+import { getSession, reopenSession, updateSessionType } from '../lib/state';
 import { moveToActive, renameSessionChannel } from '../lib/hub';
 import { bridge } from '../lib/bridge';
 import { v2Error, V2_FLAGS } from '../lib/v2';
@@ -9,6 +9,7 @@ import { fetchReplyContext } from '../lib/replyContext';
 import { downloadAttachments, DownloadResult } from '../lib/attachments';
 import { isTeamMember } from '../lib/team';
 import { normalizeDiscordRequest } from '../lib/inputNormalizer';
+import { isKnownSessionCategory, isLiveSessionCategory } from '../lib/sessionCategories';
 
 const event: BotEvent<'messageCreate'> = {
   name: 'messageCreate',
@@ -25,10 +26,11 @@ const event: BotEvent<'messageCreate'> = {
     let sessionChannel: TextChannel | null = null;
     if (ch.type === ChannelType.GuildText) {
       const text = ch as TextChannel;
-      if (
-        text.parentId !== config.categoryId &&
-        (!config.archiveCategoryId || text.parentId !== config.archiveCategoryId)
-      ) return;
+      if (!isKnownSessionCategory(text.parentId, {
+        active: config.categoryId,
+        background: config.backgroundCategoryId,
+        archive: config.archiveCategoryId,
+      })) return;
       sessionChannel = text;
     } else if (
       ch.type === ChannelType.PublicThread ||
@@ -38,7 +40,10 @@ const event: BotEvent<'messageCreate'> = {
       const thread = ch as ThreadChannel;
       const parent = thread.parent;
       if (!parent || parent.type !== ChannelType.GuildText) return;
-      if ((parent as TextChannel).parentId !== config.categoryId) return;
+      if (!isLiveSessionCategory((parent as TextChannel).parentId, {
+        active: config.categoryId,
+        background: config.backgroundCategoryId,
+      })) return;
       sessionChannel = parent as TextChannel;
     } else {
       return;
@@ -87,6 +92,7 @@ const event: BotEvent<'messageCreate'> = {
       }
       const ok = reopenSession(sessionChannel.id);
       if (ok) {
+        updateSessionType(sessionChannel.id, 'foreground');
         session = getSession(sessionChannel.id);
         await renameSessionChannel(sessionChannel, '').catch(() => {});
         await sessionChannel.send({

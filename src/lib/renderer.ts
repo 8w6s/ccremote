@@ -15,11 +15,12 @@ import {
 export type SessionChannel = TextChannel | ThreadChannel;
 import { Coalescer } from './throttle';
 import { scrub, escapeCodeFences } from './scrubber';
-import { V2_FLAGS } from './v2';
+import { V2_FLAGS, v2Panel } from './v2';
 import { log } from './logger';
 import { formatToolUse, formatToolResult } from './toolFormat';
 import { applyTaskTool, finalizeTaskCreate, getTasks, replaceTodos } from './taskStore';
 import { InteractionEvent } from './interactionEvents';
+import { parseContextUsage } from './contextUsage';
 
 const MSG_MAX = 1900;
 const EDIT_THROTTLE_MS = 1000;
@@ -41,7 +42,20 @@ function formatTokens(tokens: number): string {
   return `${(safeTokens / 1000).toFixed(1)}k`;
 }
 
+type ToolMeta = {
+  name: string;
+  label: string;
+  icon: string;
+  primary: string;
+  subtext?: string;
+  startedAt: number;
+};
+
 const liveToolMessages = new Map<string, Message>();
+const liveToolMeta = new Map<string, ToolMeta>();
+const liveToolClaims = new Set<string>();
+const finalizingToolKeys = new Set<string>();
+const completedToolKeys = new Set<string>();
 const liveTodoMessages = new Map<string, Message>();
 
 function liveToolKey(channelId: string, toolUseId: string): string {
@@ -85,6 +99,10 @@ function safe(t: string, max = 4000): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
+function isUnknownMessageError(error: unknown): boolean {
+  return (error as { code?: number } | null)?.code === 10008;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Session header
 // ─────────────────────────────────────────────────────────────
@@ -126,14 +144,14 @@ export class Renderer {
 
   // Tool state
   private toolMessages = new Map<string, Message>();
-  private toolMeta = new Map<
-    string,
-    { name: string; label: string; icon: string; primary: string; subtext?: string; startedAt: number }
-  >();
+  private toolMeta = new Map<string, ToolMeta>();
   private toolNamePreReg = new Map<string, string>();
   private seenToolUseIds = new Set<string>();
 
   private todoMsg: Message | null = null;
+  private retryMsg: Message | null = null;
+  private rateLimitMsg: Message | null = null;
+  private backgroundTaskMessages = new Map<string, Message>();
   private recentThinking = new Map<string, number>();
 
   private thinkingFullById = new Map<string, string>();
@@ -145,6 +163,8 @@ export class Renderer {
     string,
     {
       thread: ThreadChannel | null;
+      controlMsg: Message | null;
+      todoMsg: Message | null;
       subagentType: string;
       description: string;
       startedAt: number;
@@ -243,7 +263,7 @@ export class Renderer {
     return this.thinkingFullById.get(id);
   }
 
-  // ────── Helpers: chọn scope theo parent_tool_use_id ──────
+  // ────── Resolve output scope from parent_tool_use_id ──────
 
   /**
    */
@@ -353,13 +373,17 @@ export class Renderer {
       }
     } catch (err) {
       log.warn('assistant edit failed:', err instanceof Error ? err.message : err);
-      this.assistantMsg = null;
+      // Keep identity across transient Discord failures. Only create a new
+      // message when Discord confirms that the original was deleted.
+      if (isUnknownMessageError(err)) this.assistantMsg = null;
     }
   }
 
   private async appendTaskAssistantText(
     task: NonNullable<ReturnType<Map<string, {
       thread: ThreadChannel | null;
+      controlMsg: Message | null;
+      todoMsg: Message | null;
       subagentType: string;
       description: string;
       startedAt: number;
@@ -412,7 +436,7 @@ export class Renderer {
       }
     } catch (err) {
       log.warn('task assistant edit failed:', err instanceof Error ? err.message : err);
-      task.assistantMsg = null;
+      if (isUnknownMessageError(err)) task.assistantMsg = null;
     }
   }
 
@@ -430,7 +454,7 @@ export class Renderer {
   // ────── Tool use ──────
 
   /**
-   * (race hoặc CLI-restart giữa turn).
+   * Covers an event race or a CLI restart during a turn.
    */
   preRegisterTool(toolUseId: string, name: string, _parentToolUseId?: string): void {
     if (!name) return;
@@ -474,6 +498,13 @@ export class Renderer {
       return;
     }
 
+    const sharedKey = liveToolKey(this.channel.id, toolUseId);
+    // Runner stdout and the JSONL tail can briefly observe the same tool. The
+    // synchronous claim closes the send/await race between two Renderer
+    // instances and guarantees one card per tool_use_id.
+    if (liveToolClaims.has(sharedKey) || liveToolMessages.has(sharedKey)) return;
+    liveToolClaims.add(sharedKey);
+
     const target = this.sendTargetFor(parentToolUseId);
     const fmt = formatToolUse(name, input);
 
@@ -482,14 +513,16 @@ export class Renderer {
       if (t) t.toolCount++;
     }
 
-    this.toolMeta.set(toolUseId, {
+    const metadata: ToolMeta = {
       name,
       label: fmt.label,
       icon: fmt.icon,
       primary: fmt.primary,
       subtext: fmt.subtext,
       startedAt: Date.now(),
-    });
+    };
+    this.toolMeta.set(toolUseId, metadata);
+    liveToolMeta.set(sharedKey, metadata);
 
     const c = new ContainerBuilder().setAccentColor(toolAccent('running'));
     c.addTextDisplayComponents(
@@ -519,6 +552,8 @@ export class Renderer {
       this.toolMessages.set(toolUseId, msg);
       liveToolMessages.set(liveToolKey(this.channel.id, toolUseId), msg);
     } catch (err) {
+      liveToolClaims.delete(sharedKey);
+      liveToolMeta.delete(sharedKey);
       log.warn('onToolUse failed:', err instanceof Error ? err.message : err);
     }
 
@@ -548,8 +583,14 @@ export class Renderer {
       return;
     }
 
-    const meta = this.toolMeta.get(toolUseId);
-    const msg = this.toolMessages.get(toolUseId);
+    const sharedKey = liveToolKey(this.channel.id, toolUseId);
+    if (completedToolKeys.has(sharedKey) || finalizingToolKeys.has(sharedKey)) return;
+    finalizingToolKeys.add(sharedKey);
+
+    const meta = this.toolMeta.get(toolUseId) ?? liveToolMeta.get(sharedKey);
+    const msg = this.toolMessages.get(toolUseId)
+      ?? liveToolMessages.get(sharedKey)
+      ?? await waitForToolMessage(this.channel.id, toolUseId);
     const duration = meta ? Date.now() - meta.startedAt : undefined;
     const target = this.sendTargetFor(parentToolUseId);
 
@@ -608,8 +649,15 @@ export class Renderer {
       log.warn('onToolResult failed:', err instanceof Error ? err.message : err);
     }
 
+    finalizingToolKeys.delete(sharedKey);
+    completedToolKeys.add(sharedKey);
+    if (completedToolKeys.size > 4000) {
+      for (const key of [...completedToolKeys].slice(0, 2000)) completedToolKeys.delete(key);
+    }
     this.toolMessages.delete(toolUseId);
-    liveToolMessages.delete(liveToolKey(this.channel.id, toolUseId));
+    liveToolMessages.delete(sharedKey);
+    liveToolMeta.delete(sharedKey);
+    liveToolClaims.delete(sharedKey);
     this.toolMeta.delete(toolUseId);
     this.toolNamePreReg.delete(toolUseId);
   }
@@ -673,12 +721,14 @@ export class Renderer {
 
     if (parentToolUseId && this.taskThreads.has(parentToolUseId)) {
       const target = this.sendTargetFor(parentToolUseId);
+      const task = this.taskThreads.get(parentToolUseId)!;
       try {
-        await target.send({
-          components: [c],
-          flags: V2_FLAGS,
-          allowedMentions: { parse: [] },
-        });
+        const payload = { components: [c], flags: V2_FLAGS, allowedMentions: { parse: [] as never[] } };
+        if (task.todoMsg) {
+          await task.todoMsg.edit(payload as unknown as Parameters<Message['edit']>[0]);
+        } else {
+          task.todoMsg = await target.send(payload as unknown as Parameters<typeof target.send>[0]);
+        }
       } catch (err) {
         log.warn('renderTodo (task) failed:', err instanceof Error ? err.message : err);
       }
@@ -833,26 +883,96 @@ export class Renderer {
     c.addTextDisplayComponents(
       td(`## ⚠ Rate limit — ${status}${rateLimitType ? ` (${rateLimitType})` : ''}${resetTxt}`),
     );
-    await this.channel
-      .send({ components: [c], flags: V2_FLAGS, allowedMentions: { parse: [] } })
-      .catch(() => {});
+    const payload = { components: [c], flags: V2_FLAGS, allowedMentions: { parse: [] as never[] } };
+    try {
+      if (this.rateLimitMsg) {
+        await this.rateLimitMsg.edit(payload as unknown as Parameters<Message['edit']>[0]);
+      } else {
+        this.rateLimitMsg = await this.channel.send(payload as unknown as Parameters<typeof this.channel.send>[0]);
+      }
+    } catch (error) {
+      if (isUnknownMessageError(error)) this.rateLimitMsg = null;
+    }
   }
 
   async postRetry(attempt: number, maxAttempts: number, delayMs?: number): Promise<void> {
     const nextIn = delayMs ? ` · next in ${(delayMs / 1000).toFixed(1)}s` : '';
-    await this.channel
-      .send({
-        content: `-# ↻ Retrying (${attempt}/${maxAttempts})${nextIn}`,
-        allowedMentions: { parse: [] },
-      })
-      .catch(() => {});
+    const payload = {
+      content: `-# ↻ Retrying (${attempt}/${maxAttempts})${nextIn}`,
+      allowedMentions: { parse: [] as never[] },
+    };
+    try {
+      if (this.retryMsg) await this.retryMsg.edit(payload);
+      else this.retryMsg = await this.channel.send(payload);
+    } catch (error) {
+      if (isUnknownMessageError(error)) this.retryMsg = null;
+    }
+  }
+
+  async postBackgroundTaskStatus(
+    taskId: string,
+    title: string,
+    detail: string,
+    status: 'running' | 'completed' | 'error' = 'running',
+  ): Promise<void> {
+    const key = taskId || 'background-task';
+    const c = new ContainerBuilder().setAccentColor(
+      status === 'error' ? COLOR_TOOL_ERR : status === 'completed' ? COLOR_TOOL_OK : COLOR_TOOL_RUN,
+    );
+    const icon = status === 'error' ? '❌' : status === 'completed' ? '✅' : 'ℹ️';
+    c.addTextDisplayComponents(td(`## ${icon} ${safe(title, 180)}`));
+    if (detail.trim()) c.addTextDisplayComponents(td(safe(detail, 3000)));
+    const payload = { components: [c], flags: V2_FLAGS, allowedMentions: { parse: [] as never[] } };
+    const current = this.backgroundTaskMessages.get(key);
+    try {
+      if (current) {
+        await current.edit(payload as unknown as Parameters<Message['edit']>[0]);
+      } else {
+        const message = await this.channel.send(payload as unknown as Parameters<typeof this.channel.send>[0]);
+        this.backgroundTaskMessages.set(key, message);
+      }
+    } catch (err) {
+      log.warn('postBackgroundTaskStatus failed:', err instanceof Error ? err.message : err);
+      if (isUnknownMessageError(err)) this.backgroundTaskMessages.delete(key);
+    }
   }
 
   async postSystemNotice(title: string, detail?: string, warning = false): Promise<void> {
     const c = new ContainerBuilder().setAccentColor(warning ? 0xffc107 : COLOR_TOOL_RUN);
-    c.addTextDisplayComponents(td(`## ${warning ? '⚠' : 'ℹ'} ${safe(title, 180)}`));
+    c.addTextDisplayComponents(td(`## ${warning ? '⚠️' : 'ℹ️'} ${safe(title, 180)}`));
     if (detail?.trim()) c.addTextDisplayComponents(td(safe(detail, 3000)));
     await this.channel.send({ components: [c], flags: V2_FLAGS, allowedMentions: { parse: [] } }).catch(() => {});
+  }
+
+  async postContextUsage(raw: string): Promise<void> {
+    const usage = parseContextUsage(raw);
+    if (!usage) {
+      await this.postSystemNotice(
+        'Context usage',
+        raw.trim() || 'Claude Code returned no context breakdown.',
+        true,
+      );
+      return;
+    }
+    const panel = v2Panel({
+      title: 'Context Usage',
+      body:
+        `\`${usage.grid}\`\n` +
+        `⛀⛁ **Skills:** ${formatTokens(usage.skillsTokens)} tokens (${usage.skillsPercent.toFixed(1)}%)\n` +
+        `⛂⛃ **Context:** ${formatTokens(usage.contextTokens)} tokens (${usage.contextPercent.toFixed(1)}%)\n` +
+        `⛶ **Free space:** ${formatTokens(usage.freeTokens)} tokens (${usage.freePercent.toFixed(1)}%)`,
+      fields: [
+        { label: 'Used', value: `${formatTokens(usage.usedTokens)} / ${formatTokens(usage.maxTokens)} (${usage.usedPercent.toFixed(1)}%)` },
+        ...(usage.model ? [{ label: 'Model', value: usage.model }] : []),
+      ],
+      footer: '⛀⛁ skills · ⛂⛃ context · ⛶ free space',
+      accent: COLOR_BRAND,
+    });
+    await this.channel.send({
+      components: [panel],
+      flags: V2_FLAGS,
+      allowedMentions: { parse: [] },
+    }).catch(() => {});
   }
 
   async postCompactBoundary(pre?: number, post?: number, trigger?: string): Promise<void> {
@@ -867,9 +987,13 @@ export class Renderer {
       .catch(() => {});
   }
 
-  async postTaskStarted(subagentType: string, description: string): Promise<void> {
-    void subagentType;
-    void description;
+  async postTaskStarted(taskId: string, subagentType: string, description: string): Promise<void> {
+    await this.postBackgroundTaskStatus(
+      taskId,
+      `Background task — ${subagentType}`,
+      description,
+      'running',
+    );
   }
 
   /**
@@ -888,12 +1012,13 @@ export class Renderer {
       return;
     }
 
-    // Thread name: gọn, ≤ 90 char.
+    // Keep thread names compact and within Discord's limit.
     const shortDesc = safe(description, 60).replace(/\n/g, ' ').trim() || 'task';
     const rawName = `🤖 ${subagentType} · ${shortDesc}`;
     const threadName = rawName.slice(0, 90);
 
     let thread: ThreadChannel | null = null;
+    let controlMsg: Message | null = null;
     try {
       thread = await base.threads.create({
         name: threadName,
@@ -907,12 +1032,12 @@ export class Renderer {
 
     try {
       if (thread) {
-        await base.send({
+        controlMsg = await base.send({
           content: `-# ${BULLET} 🤖 **Task**(${subagentType}) → <#${thread.id}> · ${safe(description, 200)}`,
           allowedMentions: { parse: [] },
         });
       } else {
-        await base.send({
+        controlMsg = await base.send({
           content: `-# ${BULLET} 🤖 **Task**(${subagentType}) · ${safe(description, 200)} — (thread creation failed, running inline)`,
           allowedMentions: { parse: [] },
         });
@@ -941,6 +1066,8 @@ export class Renderer {
 
     const task: NonNullable<ReturnType<typeof this.taskThreads.get>> = {
       thread,
+      controlMsg,
+      todoMsg: null,
       subagentType,
       description,
       startedAt: Date.now(),
@@ -992,13 +1119,12 @@ export class Renderer {
         c.addTextDisplayComponents(td(`  ${RETURN} \`\`\`\n${preview}\n\`\`\``));
       }
       c.addTextDisplayComponents(td(`-# ${summary}`));
-      await base
-        .send({
-          components: [c],
-          flags: V2_FLAGS,
-          allowedMentions: { parse: [] },
-        })
-        .catch(() => {});
+      const payload = { components: [c], flags: V2_FLAGS, allowedMentions: { parse: [] as never[] } };
+      if (t.controlMsg) {
+        await t.controlMsg.edit(payload as unknown as Parameters<Message['edit']>[0]).catch(() => {});
+      } else {
+        await base.send(payload as unknown as Parameters<typeof base.send>[0]).catch(() => {});
+      }
     }
 
     if (t.thread) {

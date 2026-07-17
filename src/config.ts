@@ -1,12 +1,12 @@
 import dotenv from 'dotenv';
 import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 dotenv.config();
 
 /**
  * Runtime configuration for clauderemote.
- * Bắt buộc: BOT_TOKEN, CLIENT_ID, GUILD_ID, OWNER_ID, HUB_CHANNEL_ID, CATEGORY_ID.
- *          MAX_COST_USD_PER_SESSION, MAX_COST_USD_PER_DAY.
+ * Required: BOT_TOKEN, CLIENT_ID, GUILD_ID, OWNER_ID, HUB_CHANNEL_ID, CATEGORY_ID.
  */
 
 function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number {
@@ -28,6 +28,7 @@ export const config = {
   ownerId: process.env.OWNER_ID ?? '',
   hubChannelId: process.env.HUB_CHANNEL_ID ?? '',
   categoryId: process.env.CATEGORY_ID ?? '',
+  backgroundCategoryId: process.env.BACKGROUND_CATEGORY_ID ?? '',
 
   /**
    *
@@ -37,8 +38,8 @@ export const config = {
   anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL ?? '',
   anthropicAuthToken: process.env.ANTHROPIC_AUTH_TOKEN ?? '',
 
-  defaultCwd: process.env.DEFAULT_CWD ?? `${homedir()}/PROJECTS`,
-  allowedCwdPrefixes: (process.env.ALLOWED_CWD_PREFIXES ?? `${homedir()}/PROJECTS,${tmpdir()}`)
+  defaultCwd: process.env.DEFAULT_CWD || join(homedir(), 'PROJECTS'),
+  allowedCwdPrefixes: (process.env.ALLOWED_CWD_PREFIXES || `${join(homedir(), 'PROJECTS')},${tmpdir()}`)
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),

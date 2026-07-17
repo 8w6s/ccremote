@@ -1,294 +1,186 @@
-# clauderemote
+# ccRemote
 
-Control the real Claude Code CLI on your workstation or VPS from Discord.
+ccRemote runs Claude Code on your own machine and lets you operate it from Discord. Each Discord channel maps to one Claude session: messages become prompts, files become inputs, and Claude's replies, tools, approvals, plans, and task state are rendered back into the channel.
 
-clauderemote is a self-hosted control plane, not a Claude reimplementation. A Discord channel represents a Claude Code session; messages become prompts; assistant output, tool calls, permissions, questions, plans, tasks, and status are rendered back into Discord. Claude's local JSONL transcript remains the authoritative conversation record.
+The Claude JSONL transcript on disk remains the source of truth. Discord is a remote interface, not a replacement session format.
 
-> Read [DOCS.md](DOCS.md) for the complete product specification, every command and component interaction, state model, synchronization protocol, security boundary, and recovery behavior.
+## What works
 
-## Highlights
+- Create, reopen, close, fork, branch, rename, sync, and delete sessions.
+- Stream replies without sending a new message for every text fragment.
+- Show tool calls as cards that move from running to their final state.
+- Handle Bash and file-edit approvals, including diffs and permission suggestions.
+- Render `AskUserQuestion` as Discord selects, buttons, and modals.
+- Keep one live task dashboard per session.
+- Import existing Claude Code JSONL sessions and resume from checkpoints.
+- Accept text, source files, images, binary attachments, and Discord oversized pastes.
+- Run steerable background sessions in a separate category.
+- Keep stable channel sequence names such as `s-0000-0001`.
 
-- One Discord channel per Claude session UUID.
-- Shared event pipeline for live Claude output and JSONL transcript replay.
-- Streaming assistant responses with edit throttling and duplicate guards.
-- Tool cards that update from running to success, failure, denial, or cancellation.
-- Discord approval UI for Bash, generic tools, Edit/Write diffs, and ExitPlanMode.
-- Full AskUserQuestion flow: single-select, multi-select, descriptions, custom answers, partial submission, navigation, and pagination beyond 25 options.
-- One real-time task dashboard per channel plus ephemeral `/task` views.
-- Stable session names such as `s-0000-0001`, independent from timestamps and UUIDs.
-- Import and mirror local Claude JSONL sessions with progress and resumable byte checkpoints.
-- Attachment normalization for oversized Discord pastes, text/code, images, and binary files.
-- Owner/team authorization, cwd allowlist, secret scrubbing, process singleton, and mapping reconciliation.
-- Deterministic `resolve-channel` CLI for automation.
-
-## Architecture
-
-```text
-Discord input
-   │
-   ▼
-authorization + input normalization
-   │
-   ▼
-channel/session mapping ─── Runner ─── local `claude` CLI
-                               │              │
-                               │ live events  │ JSONL
-                               ▼              ▼
-                         canonical event model
-                                  │
-                                  ▼
-                         shared Discord renderer
-```
-
-Identity rules:
-
-- Claude session UUID is the authoritative conversation identity.
-- Discord channel ID is the authoritative frontend identity.
-- JSONL path is stored explicitly.
-- Channel names are display labels only.
-- Discord snowflakes are never transformed into Claude UUIDs.
+The full behavior and data model are documented in [DOCS.md](DOCS.md).
 
 ## Requirements
 
-- Node.js 22 or newer.
-- Claude Code installed and available as `claude` in `PATH`.
-- A Discord application and bot token.
-- One Discord guild with:
-  - an active-session category;
-  - a hub text channel;
-  - optionally an archive category.
-- Discord bot permissions to view/send/manage messages, create/manage channels and threads, and manage the bot's effort roles.
-- Message Content intent enabled. Guild Members intent is needed for member/role and handoff features.
+- Node.js 22 or newer
+- Claude Code installed as `claude` and available in `PATH`
+- Python 3.10 or newer for the interactive installer
+- A Discord application with Message Content intent enabled
+- A private Discord server where the bot can manage channels, threads, messages, and its own roles
 
-## Installation
+Guild Members intent is also required for role and handoff features.
+
+## Quick start
 
 ```bash
-git clone https://github.com/8w6s/clauderemote.git
-cd clauderemote
+git clone https://github.com/8w6s/ccremote.git
+cd ccremote
+./setup.sh
+```
+
+On Windows, run:
+
+```powershell
+.\setup.ps1
+```
+
+The installer can write `.env`, configure a custom Claude-compatible API, install dependencies, run checks, register slash commands, and create a user-level startup service. It asks before performing each optional action. When autostart is enabled, setup copies a production-only runtime into the current user's application-data directory; the service does not depend on the cloned repository remaining in place.
+
+To try the interface without changing files or starting services:
+
+```bash
+python3 setup/demo.py
+```
+
+### Manual installation
+
+```bash
 npm ci
 cp .env.example .env
-```
-
-Fill in `.env`, then register guild commands once:
-
-```bash
+# edit .env
+npm run check
 npm run deploy
-```
-
-Development foreground process:
-
-```bash
 npm run dev
 ```
 
-Production build:
+For a production build:
 
 ```bash
 npm run build
 npm start
 ```
 
-Use exactly one process manager. Do not run systemd and a manual/nohup copy at the same time. A PID lock is additional protection, not a substitute for correct service management.
+Run only one copy of the bot. If the installer created an autostart service, do not also leave `npm run dev` running. After a successful daemon installation the source checkout may be removed, although keeping it makes future updates easier.
 
-## Configuration
+## Discord setup
 
-Required:
+Create these first:
 
-| Variable | Meaning |
+1. A hub text channel for the New Session control.
+2. A category for active sessions.
+3. A category for archived sessions, if you want `/close` to move channels.
+4. A category for background sessions, if you want `/background`.
+
+Put their IDs in `.env`. The required values are:
+
+| Variable | Purpose |
 |---|---|
 | `BOT_TOKEN` | Discord bot token |
 | `CLIENT_ID` | Discord application ID |
-| `GUILD_ID` | The only authorized guild |
-| `OWNER_ID` | Bot owner Discord user ID |
+| `GUILD_ID` | The one server ccRemote is allowed to remain in |
+| `OWNER_ID` | Discord user allowed to run owner-only commands |
 | `HUB_CHANNEL_ID` | Channel containing the New Session control |
 | `CATEGORY_ID` | Active session category |
 
-Optional:
+Useful optional values:
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `ARCHIVE_CATEGORY_ID` | empty | Category used by `/close` |
-| `ANTHROPIC_BASE_URL` | Claude default | Custom Claude/Anthropic-compatible endpoint |
-| `ANTHROPIC_AUTH_TOKEN` | Claude default | Custom endpoint credential |
-| `DEFAULT_CWD` | `<home>/PROJECTS` | Initial working directory |
-| `ALLOWED_CWD_PREFIXES` | project root and OS temp | Comma-separated canonical cwd roots |
-| `MAX_PROMPTS_PER_HOUR` | `60` | Per-channel in-memory prompt limit |
-| `MAX_ATTACHMENT_BYTES` | `26214400` | Maximum downloaded attachment size |
-| `MAX_IMAGE_BYTES` | `5242880` | Maximum inline image size |
-| `MAX_INLINE_IMAGES` | `5` | Maximum inline images per prompt |
-| `MAX_INLINE_TEXT_BYTES` | `262144` | Maximum text attachment inlined into a prompt |
-| `ATTACHMENT_DOWNLOAD_TIMEOUT_MS` | `30000` | Attachment download timeout |
-
-Never commit `.env`. Local state is stored below `$XDG_STATE_HOME/clauderemote` or the platform home-state fallback. Claude transcripts remain under Claude Code's own project storage.
-
-## Session workflow
-
-1. Press **New Session** or run `/new`.
-2. The bot allocates a stable sequence and creates `🟣-s-NNNN-NNNN`.
-3. Send a message or attachment in the channel.
-4. The bot normalizes input and lazily starts Claude.
-5. Output streams back; tool messages update in place.
-6. Permission requests become correlated buttons/selects/modals.
-7. Use `/close` to archive without deleting JSONL.
-8. Send another message or use `/open` to reopen.
-9. Use `/delete confirm:true` only for permanent removal.
-
-Typing starts only for accepted prompts. A successful live turn mentions its requester once; cancelled, ignored, duplicated, or historical sync events do not.
-
-## Input and attachments
-
-- Unicode emoji remains ordinary prompt text.
-- Discord custom emoji tokens are stripped.
-- Sticker-only and custom-emoji-only messages are ignored without waking Claude.
-- Visible message content is retained when files are attached.
-- Small UTF-8 text/code files are inlined with filename boundaries.
-- Discord oversized `messages.txt` pastes are merged with visible text.
-- Large text and binary files are stored under the operating system temp directory:
-
-```text
-<temp>/clauderemote/<session-or-channel>/<message>/<safe unique filename>
-```
-
-- Names are sanitized, downloads are size/time bounded, and files are never executed automatically.
-- Eligible files are cleaned on close/delete and by lifecycle cleanup.
-
-## Permission modes
-
-Use `/mode`:
-
-| Mode | Behavior |
+| Variable | Purpose |
 |---|---|
-| `bypassPermissions` | Passes Claude's dangerous skip-permissions flag |
-| `auto` | Runtime decides which actions require confirmation |
-| `manual` | Forces interactive permission handling where supported |
-| `acceptEdits` | Eligible edits are accepted; other tools may prompt |
-| `plan` | Planning/read-only workflow with dedicated plan approval |
+| `ARCHIVE_CATEGORY_ID` | Destination used by `/close` |
+| `BACKGROUND_CATEGORY_ID` | Destination used by `/background` |
+| `DEFAULT_CWD` | Starting directory for new sessions |
+| `ALLOWED_CWD_PREFIXES` | Comma-separated roots accepted by `/cwd` and `/cd` |
+| `MAX_PROMPTS_PER_HOUR` | Per-channel prompt limit; defaults to `60` |
+| `MAX_ATTACHMENT_BYTES` | Maximum downloaded attachment size |
+| `MAX_INLINE_TEXT_BYTES` | Maximum text attachment inlined into a prompt |
 
-Approve Once does not persist permission suggestions. Always Allow is shown only when Claude supplies real `permission_suggestions`, which are returned through the documented permission result.
+See [.env.example](.env.example) for every setting and its default.
 
-## Effort
+ccRemote leaves any guild whose ID does not match `GUILD_ID`. This prevents an accidentally public invite from turning the host into a shared Claude runner.
 
-Use `/effort` to set per-session reasoning effort. The visual role belongs to the bot member, never the human user:
+## Using it
 
-- low — yellow
-- medium — green
-- high — cyan
-- xhigh — light purple
-- max — red
-- ultracode — deep purple
-- auto — model default, no explicit effort role
+Press **New Session** in the hub or run `/new`. The bot creates a mapped session channel. Send ordinary messages and attachments there; Claude starts lazily on the first valid prompt.
 
-Changing mode/effort/model during a turn is deferred until the turn finishes where interruption would corrupt the active workflow.
+`/close` archives the channel but keeps its mapping and JSONL. Sending another message or running `/open` makes it active again. `/delete` is the destructive operation and requires confirmation.
 
-## Commands
+Common commands:
 
-| Command | Purpose |
+| Command | Action |
 |---|---|
-| `/new` | Create a mapped session channel |
-| `/close` | Stop and archive without deleting history |
-| `/open` | Reopen a closed session |
-| `/delete` | Permanently remove the exact mapped session |
-| `/rename` | Change display name without changing identity |
-| `/branch` | Replay/fork into a new channel |
-| `/fork` | Fork Claude identity in the current channel |
-| `/sync-sessions` | Import all unmapped local JSONL sessions |
-| `/status` | Show session identity, sync, Runner, JSONL and mapping health |
-| `/cwd` | Change to a canonical allowed working directory |
-| `/model` | Set the session model |
-| `/mode` | Set permission mode |
-| `/effort` | Set effort and bot effort role |
-| `/clear` | Clear active context while preserving transcript |
-| `/compact` | Request native context compaction |
-| `/context` | Request detailed context information on official Anthropic API |
-| `/usage` | Request Claude usage/cost information |
-| `/btw` | Send a visually distinct quick aside |
-| `/stop` | Abort the active turn |
-| `/rewind` | Browse historical user prompts ephemerally |
-| `/task` | Show the session task list ephemerally |
-| `/goal` | Manage persistent bot-side objective metadata |
-| `/loop` | Start/status/stop recurring prompt intent |
-| `/skill` | Invoke a local Claude skill |
-| `/reload-skills` | Reload skills on the next Runner |
-| `/diff`, `/doctor`, `/init`, `/recap` | Forward native Claude Code commands |
-| `/git` | Run a constrained native Git utility without a Claude turn |
-| `/team` | Owner-only team allowlist management |
-| `/handoff` | Grant an authorized user channel access |
-| `/notify` | Toggle long-turn completion notifications |
-| `/ping` | Test bot interaction health |
-| `/claude-help` | Show the Discord/Claude feature map |
+| `/new` | Create a session channel |
+| `/status` | Show UUID, JSONL path, cwd, model, mode, effort, sync, and runner state |
+| `/close`, `/open` | Archive or reopen the current session |
+| `/branch`, `/fork` | Create a related conversation |
+| `/sync-sessions` | Import unmapped local Claude sessions |
+| `/mode`, `/model`, `/effort` | Change Claude runtime settings |
+| `/task` | Show the current task list ephemerally |
+| `/context` | Show context, skills, and free-space usage |
+| `/background` | Start an independently steerable background session |
+| `/stop` | Stop the current foreground or background run |
+| `/login`, `/logout`, `/customapi` | Manage machine-wide Claude authentication; owner only |
+| `/recap` | Generate or configure session recaps |
 
-Every option, state transition, interaction and failure mode is documented in [DOCS.md](DOCS.md#16-commands).
+The complete command reference, including component states and failure handling, is in [DOCS.md](DOCS.md#16-commands).
 
-## Local transcript synchronization
+## Files and attachments
 
-`/sync-sessions` discovers Claude JSONL files on the machine. Initial ordering uses the first valid transcript timestamp, then filesystem birth/modified time, UUID, and path. Existing sequences never change.
+Small text and source files are included directly in the prompt. Large text files and binary files are downloaded to a sanitized, collision-safe path below the operating system's temporary directory. Discord-generated `messages.txt` attachments are merged with the visible part of the message, so an oversized paste reaches Claude as one prompt.
 
-Import progress shows events, percentage and ETA. Byte checkpoints are stored at complete JSONL record boundaries. After initial import, the mirror catches up from its durable offset and tails new complete records. Tool results correlate to tool cards by the real tool-use ID.
+Unicode emoji are kept. Discord custom emoji and stickers are ignored as control noise; a message containing nothing else does not start or resume Claude.
 
-Unknown/internal/thinking records are not rendered. Unknown public records are logged defensively rather than crashing the mirror.
+## Session storage
 
-## Resolver CLI
+Claude's transcripts stay in Claude Code's normal project storage. ccRemote stores channel mappings, sequence numbers, sync checkpoints, team access, and notification preferences in its own state directory under `$XDG_STATE_HOME/clauderemote` or the platform fallback.
 
-After a build or global package installation:
+Channel names are labels only. The mapping is based on Discord channel ID and Claude session UUID, so renaming a channel does not break a session.
 
-```bash
-clauderemote resolve-channel <discord_channel_id>
-```
-
-From the source tree:
+To resolve a channel outside Discord:
 
 ```bash
 npm run cli -- resolve-channel <discord_channel_id>
 ```
 
-It prints JSON containing channel ID, Claude UUID, JSONL path, cwd, sequence, and status. Exit codes distinguish invalid input, missing mapping, stale mapping, missing JSONL, and unavailable state. It never performs snowflake-to-UUID arithmetic.
+The command prints machine-readable JSON and returns distinct exit codes for missing, stale, and invalid mappings.
 
-## Security
+## Custom API endpoints
 
-clauderemote controls a local coding agent with the operating-system permissions of the bot account. Treat it as privileged infrastructure.
+`/customapi` is owner-only. It writes the endpoint, key, and model aliases into Claude Code's `settings.json`, with restrictive file permissions where the platform supports them. The values are also applied to subsequently spawned Claude processes.
 
-- Use a private guild.
-- Keep the team allowlist small.
-- Prefer a dedicated OS account/container for the bot.
-- Restrict `ALLOWED_CWD_PREFIXES`.
-- Understand that `bypassPermissions` is dangerous.
-- Never reuse or publish the Discord token.
-- Review [SECURITY.md](SECURITY.md).
+`/context` also works with custom API endpoints. Claude Code reports the tokens currently occupying the model's actual context window; ccRemote parses that runtime output instead of querying the provider separately.
 
-Output is scrubbed for common credential formats, but secret scrubbing is defense in depth—not permission to send secrets to Discord.
+## Security notes
 
-## Development and validation
+This bot can operate a coding agent with the permissions of its operating-system account. Keep it on a private server, use a dedicated host account or container where possible, restrict `ALLOWED_CWD_PREFIXES`, and keep the team list small. `bypassPermissions` removes important safeguards; do not use it on an untrusted host or repository.
+
+Never commit `.env`, Claude settings containing API keys, or ccRemote's runtime state. Read [SECURITY.md](SECURITY.md) before exposing the bot beyond a personal test server.
+
+## Development
 
 ```bash
 npm run typecheck
 npm run test:unit
-npm test
 npm run build
 npm pack --dry-run
 ```
 
-Or run the complete local gate:
+Run all local checks with:
 
 ```bash
 npm run check
 ```
 
-`npm run build` removes `dist` before compiling so deleted commands cannot survive as stale production artifacts. CI runs on Linux, Windows, and macOS. Production Discord integration testing should use a dedicated staging guild.
-
-## Process lifecycle
-
-The bot acquires a singleton PID lock. Graceful shutdown stops Claude children, pending approvals, the approval endpoint, and Discord before releasing the lock. Do not run multiple process managers.
-
-Source changes, migrations and builds do not affect an already running process. A deliberate service restart is required to activate a new build; release tooling must never restart production implicitly.
-
-## Documentation
-
-- [DOCS.md](DOCS.md) — complete normative specification.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — development and pull-request rules.
-- [SECURITY.md](SECURITY.md) — vulnerability reporting and host security boundary.
-- [.env.example](.env.example) — configuration template.
-- [LICENSE](LICENSE) — MIT license.
+Live events and imported JSONL events pass through the same normalized event model and Discord renderer. If you add a new Claude event, implement it in that shared path rather than creating a Discord-only branch. More detail is in [DOCS.md](DOCS.md).
 
 ## License
 
-MIT.
+MIT. Created and maintained by [8w6s](https://github.com/8w6s).

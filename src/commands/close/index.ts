@@ -6,6 +6,7 @@ import { getSession, closeSession } from '../../lib/state';
 import { bridge } from '../../lib/bridge';
 import { renameSessionChannel, moveToArchive } from '../../lib/hub';
 import { cleanupUploads, cleanupTempAttachments } from '../../lib/attachments';
+import { isLiveSessionCategory } from '../../lib/sessionCategories';
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -20,8 +21,11 @@ const command: Command = {
       return;
     }
     const channel = ch as TextChannel;
-    if (channel.parentId !== config.categoryId) {
-      await replyV2(interaction, v2Error('❌ This channel is outside the bot CATEGORY_ID.'), {
+    if (!isLiveSessionCategory(channel.parentId, {
+      active: config.categoryId,
+      background: config.backgroundCategoryId,
+    })) {
+      await replyV2(interaction, v2Error('❌ This channel is outside the session categories.'), {
         ephemeral: true,
       });
       return;

@@ -29,6 +29,9 @@ export interface SessionState {
   jsonlPath?: string | null;
   sequenceNumber?: number | null;
   source?: 'discord' | 'cli-local' | 'branch';
+  sessionType?: 'foreground' | 'background';
+  backgroundStatus?: 'idle' | 'running' | 'stopped' | 'completed' | 'error';
+  creationRequestId?: string;
   syncState?: 'idle' | 'queued' | 'running' | 'paused' | 'completed' | 'error';
   syncCheckpoint?: number;
   syncTotal?: number;
@@ -42,6 +45,11 @@ export interface SessionState {
   model?: string | null;
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode' | null;
   permissionMode?: string | null;
+  /** Bot-managed automatic recap policy for non-interactive Claude sessions. */
+  recap?: {
+    enabled: boolean;
+    lastGeneratedAt?: number;
+  };
   /**
    */
   pendingPromptAt?: number | null;
@@ -174,7 +182,13 @@ export function listAllSessions(): Array<SessionState & { channelId: string }> {
 export function insertSession(
   channelId: string,
   cwd: string,
-  metadata: { guildId?: string; sequenceNumber?: number; source?: SessionState['source'] } = {},
+  metadata: {
+    guildId?: string;
+    sequenceNumber?: number;
+    source?: SessionState['source'];
+    sessionType?: SessionState['sessionType'];
+    creationRequestId?: string;
+  } = {},
 ): void {
   const store = loadStore();
   if (metadata.sequenceNumber != null) {
@@ -190,6 +204,9 @@ export function insertSession(
     guildId: metadata.guildId,
     sequenceNumber: metadata.sequenceNumber ?? null,
     source: metadata.source ?? 'discord',
+    sessionType: metadata.sessionType ?? 'foreground',
+    backgroundStatus: metadata.sessionType === 'background' ? 'idle' : undefined,
+    creationRequestId: metadata.creationRequestId,
     syncState: 'idle',
     syncCheckpoint: 0,
     syncTotal: 0,
@@ -371,6 +388,30 @@ export function updateSessionPermissionMode(channelId: string, mode: string | nu
   saveStore();
 }
 
+export function updateSessionRecap(
+  channelId: string,
+  enabled: boolean,
+  lastGeneratedAt?: number,
+): void {
+  const session = loadStore()[channelId];
+  if (!session) return;
+  session.recap = {
+    enabled,
+    lastGeneratedAt: lastGeneratedAt ?? session.recap?.lastGeneratedAt,
+  };
+  saveStore();
+}
+
+export function markSessionRecapGenerated(channelId: string): void {
+  const session = loadStore()[channelId];
+  if (!session) return;
+  session.recap = {
+    enabled: session.recap?.enabled ?? false,
+    lastGeneratedAt: Date.now(),
+  };
+  saveStore();
+}
+
 export function updateSessionLoop(
   channelId: string,
   loop: SessionState['loop'],
@@ -385,6 +426,30 @@ export function updateSessionGoal(channelId: string, goal: SessionState['goal'])
   const session = loadStore()[channelId];
   if (!session) return;
   session.goal = goal;
+  saveStore();
+}
+
+export function updateBackgroundStatus(
+  channelId: string,
+  status: NonNullable<SessionState['backgroundStatus']>,
+): void {
+  const session = loadStore()[channelId];
+  if (!session || session.sessionType !== 'background') return;
+  session.backgroundStatus = status;
+  session.lastActiveAt = Date.now();
+  saveStore();
+}
+
+export function updateSessionType(
+  channelId: string,
+  sessionType: NonNullable<SessionState['sessionType']>,
+): void {
+  const session = loadStore()[channelId];
+  if (!session) return;
+  session.sessionType = sessionType;
+  if (sessionType === 'foreground') session.backgroundStatus = undefined;
+  else session.backgroundStatus ??= 'idle';
+  session.lastActiveAt = Date.now();
   saveStore();
 }
 

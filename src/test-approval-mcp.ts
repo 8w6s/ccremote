@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { approvalMcpServer } from './lib/approvalMcpServer';
 
 async function main(): Promise<void> {
@@ -20,7 +22,7 @@ async function main(): Promise<void> {
       '--debug',
       'mcp',
       '--debug-file',
-      '/tmp/clauderemote-approval-debug.log',
+      join(tmpdir(), 'clauderemote-approval-debug.log'),
       '--permission-mode',
       'manual',
       '--strict-mcp-config',

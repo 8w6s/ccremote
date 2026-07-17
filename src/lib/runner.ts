@@ -12,12 +12,15 @@ import {
   markPromptPending,
   clearPromptPending,
   clearSessionForkSource,
+  markSessionRecapGenerated,
+  updateBackgroundStatus,
 } from './state';
 import { getNotify } from './notify';
 import { jsonlMirror } from './jsonlMirror';
 import { cleanupChannelApprovals } from './approvalRegistry';
 import { approvalMcpServer } from './approvalMcpServer';
 import { log } from './logger';
+import { customApiEnvironment } from './customApi';
 
 /**
  * Runner manages a background Claude CLI process in print/stream-json mode.
@@ -37,6 +40,7 @@ interface RunnerOpts {
 }
 
 export class Runner {
+  static readonly AUTO_RECAP_IDLE_MS = 3 * 60_000;
   private channelId: string;
   private renderer: Renderer;
   private child: ChildProcess | null = null;
@@ -69,6 +73,10 @@ export class Runner {
   private lastPromptUserId: string | null = null;
   private completionMentionedForTurn = false;
   private afterTurnCallbacks: Array<() => void> = [];
+  private automaticRecapTimer: NodeJS.Timeout | null = null;
+  private currentTurnIsAutomaticRecap = false;
+  private currentTurnTag: string | null = null;
+  private capturedContextOutput = '';
 
   /**
    */
@@ -76,7 +84,7 @@ export class Runner {
     text: string;
     images: Array<{ base64: string; mediaType: string }>;
     fromUserId?: string;
-    echoOpts?: { accentColor?: number; tag?: string };
+    echoOpts?: { accentColor?: number; tag?: string; internal?: boolean; automaticRecap?: boolean };
   } | null = null;
 
   private respawnAttempts = 0;
@@ -260,6 +268,7 @@ export class Runner {
       ANTHROPIC_AUTH_TOKEN: config.anthropicAuthToken || process.env.ANTHROPIC_AUTH_TOKEN,
       ANTHROPIC_API_KEY:
         process.env.ANTHROPIC_API_KEY || config.anthropicAuthToken || undefined,
+      ...customApiEnvironment(),
     };
 
     log.dim(
@@ -397,7 +406,7 @@ export class Runner {
     text: string,
     images: Array<{ base64: string; mediaType: string }> = [],
     fromUserId?: string,
-    echoOpts?: { accentColor?: number; tag?: string },
+    echoOpts?: { accentColor?: number; tag?: string; internal?: boolean; automaticRecap?: boolean },
   ): Promise<void> {
     if (this.stopped || !this.child?.stdin || this.child.stdin.destroyed) {
       log.warn(`Runner[${this.channelId}] push: child stdin is unavailable.`);
@@ -408,19 +417,25 @@ export class Runner {
       return;
     }
 
+    if (!echoOpts?.automaticRecap) this.cancelAutomaticRecap();
     this.pendingReplayPrompt = { text, images, fromUserId, echoOpts };
     this.abortRequested = false;
     this.completionMentionedForTurn = false;
     this.currentTurnUsage = {};
     this.currentTurnThinkingTokens = 0;
     this.thinkingTokens.clear();
+    this.currentTurnIsAutomaticRecap = echoOpts?.automaticRecap === true;
+    this.currentTurnTag = echoOpts?.tag ?? null;
+    this.capturedContextOutput = '';
 
-    await this.renderer.echoUserPrompt(
-      text,
-      images.length,
-      echoOpts?.accentColor,
-      echoOpts?.tag,
-    );
+    if (!echoOpts?.internal) {
+      await this.renderer.echoUserPrompt(
+        text,
+        images.length,
+        echoOpts?.accentColor,
+        echoOpts?.tag,
+      );
+    }
 
     markPromptPending(this.channelId);
 
@@ -462,7 +477,35 @@ export class Runner {
     }
     this.turnStartedAt = Date.now();
     this.lastPromptUserId = fromUserId ?? null;
-    touchSession(this.channelId);
+    if (!echoOpts?.internal) touchSession(this.channelId);
+    updateBackgroundStatus(this.channelId, 'running');
+  }
+
+  setAutomaticRecapEnabled(enabled: boolean): void {
+    if (!enabled) this.cancelAutomaticRecap();
+  }
+
+  private cancelAutomaticRecap(): void {
+    if (!this.automaticRecapTimer) return;
+    clearTimeout(this.automaticRecapTimer);
+    this.automaticRecapTimer = null;
+  }
+
+  private scheduleAutomaticRecap(): void {
+    this.cancelAutomaticRecap();
+    const session = getSession(this.channelId);
+    if (!shouldScheduleAutomaticRecap(session, false) || this.stopped) return;
+    this.automaticRecapTimer = setTimeout(() => {
+      this.automaticRecapTimer = null;
+      const latest = getSession(this.channelId);
+      if (!latest?.recap?.enabled || this.stopped || this.isTurnActive()) return;
+      void this.push('/recap', [], undefined, {
+        tag: 'recap',
+        internal: true,
+        automaticRecap: true,
+      });
+    }, Runner.AUTO_RECAP_IDLE_MS);
+    this.automaticRecapTimer.unref();
   }
 
   abort(): void {
@@ -476,6 +519,7 @@ export class Runner {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.cancelAutomaticRecap();
     this.renderer.cancel();
     if (this.child) {
       try {
@@ -556,6 +600,7 @@ export class Runner {
         }
         case 'task_started': {
           await this.renderer.postTaskStarted(
+            String(evt.task_id ?? evt.taskId ?? evt.agent_id ?? evt.id ?? 'background-task'),
             evt.subagent_type ?? 'agent',
             evt.description ?? '',
           );
@@ -565,17 +610,30 @@ export class Runner {
         case 'task_progress':
         case 'task_notification': {
           const taskDetail = evt.message ?? evt.description ?? evt.summary ?? evt.status ?? '';
-          await this.renderer.postSystemNotice(
-            evt.subtype === 'completed' || evt.status === 'completed' ? 'Background task completed' : 'Background task update',
+          const completed = evt.subtype === 'completed' || evt.status === 'completed';
+          const failed = evt.status === 'failed' || evt.status === 'error';
+          await this.renderer.postBackgroundTaskStatus(
+            String(evt.task_id ?? evt.taskId ?? evt.agent_id ?? evt.id ?? 'background-task'),
+            completed ? 'Background task completed' : failed ? 'Background task failed' : 'Background task update',
             typeof taskDetail === 'string' ? taskDetail : JSON.stringify(taskDetail),
+            completed ? 'completed' : failed ? 'error' : 'running',
           );
           return;
         }
         case 'permission_denied': {
-          await this.renderer.postPermissionDenied(
-            evt.tool_name ?? 'tool',
-            evt.decision_reason ?? evt.message ?? '',
-          );
+          const deniedToolUseId = evt.tool_use_id ?? evt.toolUseId;
+          if (typeof deniedToolUseId === 'string' && deniedToolUseId) {
+            await this.renderer.onToolResult(
+              deniedToolUseId,
+              evt.decision_reason ?? evt.message ?? 'Permission denied',
+              true,
+            );
+          } else {
+            await this.renderer.postPermissionDenied(
+              evt.tool_name ?? 'tool',
+              evt.decision_reason ?? evt.message ?? '',
+            );
+          }
           return;
         }
         case 'compact_boundary': {
@@ -630,7 +688,11 @@ export class Runner {
           typeof evt.parent_tool_use_id === 'string' ? evt.parent_tool_use_id : undefined;
         if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
           this.renderer.stopTyping();
+          if (this.currentTurnTag === 'context' && !streamParent) {
+            this.capturedContextOutput += delta.text;
+          } else {
             await this.renderer.renderEvent({ type: 'AssistantTextDelta', text: delta.text, parentToolUseId: streamParent });
+          }
         } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
           const k = streamParent ?? 'root';
           this.thinkingBuffer.set(k, (this.thinkingBuffer.get(k) ?? '') + delta.thinking);
@@ -729,6 +791,11 @@ export class Runner {
       this.pendingReplayPrompt = null;
       this.respawnAttempts = 0;
       await this.renderer.endAssistantText();
+      if (this.currentTurnTag === 'context' && !evt.is_error) {
+        const contextOutput = this.capturedContextOutput ||
+          (typeof evt.result === 'string' ? evt.result : '');
+        await this.renderer.postContextUsage(contextOutput);
+      }
 
       const rawDetail = evt.is_error
         ? String(evt.errors?.[0] ?? evt.subtype ?? 'unknown')
@@ -762,7 +829,12 @@ export class Runner {
 
       // Completion notifications are deduplicated per accepted turn.
       const elapsed = Date.now() - this.turnStartedAt;
-      if (!this.completionMentionedForTurn && !this.abortRequested && !turnResult.is_error) {
+      if (
+        !this.currentTurnIsAutomaticRecap &&
+        !this.completionMentionedForTurn &&
+        !this.abortRequested &&
+        !turnResult.is_error
+      ) {
         this.completionMentionedForTurn = true;
         const recipients = new Set<string>();
         if (this.lastPromptUserId) recipients.add(this.lastPromptUserId);
@@ -771,13 +843,36 @@ export class Runner {
         for (const userId of recipients) await this.renderer.pingUser(userId).catch(() => {});
       }
 
+      if (!this.abortRequested && !turnResult.is_error) {
+        if (this.currentTurnIsAutomaticRecap) markSessionRecapGenerated(this.channelId);
+        else this.scheduleAutomaticRecap();
+      }
+      updateBackgroundStatus(
+        this.channelId,
+        this.abortRequested ? 'stopped' : turnResult.is_error ? 'error' : 'completed',
+      );
+
       this.currentTurnUsage = {};
+      this.currentTurnIsAutomaticRecap = false;
+      this.currentTurnTag = null;
+      this.capturedContextOutput = '';
       this.turnStartedAt = 0;
       const callbacks = this.afterTurnCallbacks.splice(0);
       for (const callback of callbacks) callback();
       return;
     }
   }
+}
+
+export function shouldScheduleAutomaticRecap(
+  session: ReturnType<typeof getSession>,
+  completedTurnWasAutomaticRecap: boolean,
+): boolean {
+  return Boolean(
+    session?.recap?.enabled &&
+    session.turnCount >= 3 &&
+    !completedTurnWasAutomaticRecap,
+  );
 }
 
 /**

@@ -279,9 +279,19 @@ export async function resumeIncompleteSyncs(client: Client): Promise<number> {
       continue;
     }
     const stat = statSync(row.jsonlPath);
-    const progress = await (channel as TextChannel).send({
-      content: `🔄 Resuming transcript sync from byte ${row.syncCheckpoint ?? 0}/${stat.size}`,
-    });
+    const textChannel = channel as TextChannel;
+    const recent = await textChannel.messages.fetch({ limit: 50 }).catch(() => null);
+    let progress = recent?.find((message) =>
+      message.author.id === client.user?.id &&
+      /^(?:🔄 Sync transcript|🔄 Resuming transcript sync)/.test(message.content),
+    ) ?? null;
+    const resumeContent = `🔄 Resuming transcript sync from byte ${row.syncCheckpoint ?? 0}/${stat.size}`;
+    if (progress) {
+      await progress.edit({ content: resumeContent }).catch((error: unknown) => {
+        if ((error as { code?: number } | null)?.code === 10008) progress = null;
+      });
+    }
+    const progressMessage = progress ?? await textChannel.send({ content: resumeContent });
     const source: DiscoveredSession = {
       uuid: row.sessionUuid,
       cwd: row.cwd,
@@ -290,7 +300,7 @@ export async function resumeIncompleteSyncs(client: Client): Promise<number> {
       createdAtMs: row.createdAt,
       bytes: stat.size,
     };
-    enqueueReplay(() => runReplay(channel as TextChannel, progress, source, false, row.sequenceNumber!));
+    enqueueReplay(() => runReplay(textChannel, progressMessage, source, false, row.sequenceNumber!));
     resumed++;
   }
   return resumed;

@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { ChatInputCommandInteraction, SlashCommandBuilder } from 'discord.js';
 import { Command } from '../../types';
 import { v2Error, v2Ok, replyV2 } from '../../lib/v2';
 import { getSession, updateSessionCwd } from '../../lib/state';
@@ -6,14 +6,7 @@ import { bridge } from '../../lib/bridge';
 import { requireSessionChannel } from '../../lib/sessionGuard';
 import { resolveAllowedCwd } from '../../lib/pathPolicy';
 
-const command: Command = {
-  data: new SlashCommandBuilder()
-    .setName('cwd')
-    .setDescription('Change the session working directory within allowed prefixes.')
-    .addStringOption((o) =>
-      o.setName('path').setDescription('Absolute path').setRequired(true),
-    ) as unknown as SlashCommandBuilder,
-  async execute(interaction) {
+export async function changeSessionCwd(interaction: ChatInputCommandInteraction): Promise<void> {
     const channel = await requireSessionChannel(interaction);
     if (!channel) return;
     const session = getSession(channel.id);
@@ -44,7 +37,16 @@ const command: Command = {
       interaction,
       v2Ok(`✅ Working directory changed to \`${resolved}\`. The next prompt will use the new working directory.`),
     );
-  },
+}
+
+const command: Command = {
+  data: new SlashCommandBuilder()
+    .setName('cwd')
+    .setDescription('Change the session working directory within allowed prefixes.')
+    .addStringOption((o) =>
+      o.setName('path').setDescription('Absolute path').setRequired(true),
+    ) as unknown as SlashCommandBuilder,
+  execute: changeSessionCwd,
 };
 
 export default command;

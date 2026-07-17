@@ -30,9 +30,9 @@
   ],
   "author": "8w6s",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/8w6s/clauderemote.git" },
-  "bugs": { "url": "https://github.com/8w6s/clauderemote/issues" },
-  "homepage": "https://github.com/8w6s/clauderemote#readme",
+  "repository": { "type": "git", "url": "https://github.com/8w6s/ccremote.git" },
+  "bugs": { "url": "https://github.com/8w6s/ccremote/issues" },
+  "homepage": "https://github.com/8w6s/ccremote#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^4.1.2",

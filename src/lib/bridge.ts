@@ -145,7 +145,10 @@ class Bridge {
   }
 
   has(channelId: string): boolean {
-    return this.runners.has(channelId);
+    // A Runner can emit stdout and write JSONL before start() resolves and the
+    // instance moves into `runners`. Treat that startup window as live-owned so
+    // JsonlMirror cannot render the same turn through a second Renderer.
+    return this.runners.has(channelId) || this.starting.has(channelId);
   }
 
   getRunnerForChannel(channelId: string): Runner | undefined {

@@ -58,8 +58,8 @@ export async function ensureHub(client: Client): Promise<void> {
   const text = channel as TextChannel;
   if (text.guildId !== config.guildId) {
     log.err(
-      `HUB_CHANNEL_ID=${config.hubChannelId} thuộc guild ${text.guildId} — ` +
-        `khớp GUILD_ID=${config.guildId}? Aborting hub setup.`,
+      `HUB_CHANNEL_ID=${config.hubChannelId} belongs to guild ${text.guildId}, ` +
+        `not configured GUILD_ID=${config.guildId}. Aborting hub setup.`,
     );
     return;
   }
@@ -72,7 +72,14 @@ export async function ensureHub(client: Client): Promise<void> {
         JSON.stringify(m.components).includes('cr:new-session'),
     );
     if (existing) {
-      log.dim(`Hub message already exists (id=${existing.id}).`);
+      await existing.edit({
+        components: [buildHubContainer()],
+        flags: V2_FLAGS,
+        allowedMentions: { parse: [] },
+      } as unknown as Parameters<typeof existing.edit>[0]).catch((error: Error) => {
+        log.warn('Unable to refresh the existing hub message:', error.message);
+      });
+      log.dim(`Refreshed existing hub message (id=${existing.id}).`);
       return;
     }
   }
