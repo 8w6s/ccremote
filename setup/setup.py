@@ -111,6 +111,24 @@ def application_data_dir() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")) / "ccremote"
 
 
+def find_claude_bin() -> Path:
+    """Resolve Claude Code without relying on an interactive shell PATH."""
+    names = ("claude.exe", "claude.cmd", "claude") if platform.system() == "Windows" else ("claude",)
+    discovered = shutil.which("claude")
+    candidates = [Path(discovered)] if discovered else []
+    roots = [
+        Path.home() / ".local" / "bin",
+        Path.home() / ".npm-global" / "bin",
+        Path.home() / ".claude" / "local",
+        Path(os.environ.get("APPDATA", "")) / "npm" if os.environ.get("APPDATA") else None,
+    ]
+    candidates.extend(root / name for root in roots if root for name in names)
+    for candidate in candidates:
+        if candidate.is_file() and (platform.system() == "Windows" or os.access(candidate, os.X_OK)):
+            return candidate.resolve()
+    raise RuntimeError("Claude Code CLI was not found. Install it, then run setup again.")
+
+
 def stage_runtime() -> Path:
     """Install a self-contained production runtime outside the source checkout."""
     if not (ROOT / "dist" / "index.js").exists():
@@ -127,7 +145,13 @@ def stage_runtime() -> Path:
     shutil.copytree(ROOT / "dist", staging / "dist")
     for name in ("package.json", "package-lock.json"):
         shutil.copy2(ROOT / name, staging / name)
-    shutil.copy2(ENV_FILE, staging / ".env")
+    claude_bin = find_claude_bin()
+    env_lines = [
+        line for line in ENV_FILE.read_text(encoding="utf-8-sig").splitlines()
+        if not line.startswith("CLAUDE_BIN=")
+    ]
+    env_lines.append(f"CLAUDE_BIN={claude_bin}")
+    (staging / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
     try:
         (staging / ".env").chmod(0o600)
     except OSError:
@@ -291,6 +315,11 @@ def main() -> int:
         return 1
     print(color(f"  ✓ Python {platform.python_version()}", C.GREEN))
     print(color(f"  ✓ Node {subprocess.check_output(['node', '--version'], text=True).strip()}", C.GREEN))
+    try:
+        print(color(f"  ✓ Claude Code {find_claude_bin()}", C.GREEN))
+    except RuntimeError as error:
+        print(color(f"  {error}", C.RED))
+        return 1
     print(color(f"  ✓ Project {ROOT}", C.GREEN))
     input(color("\n  Press Enter to continue…", C.DIM))
 

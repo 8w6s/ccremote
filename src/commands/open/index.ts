@@ -18,19 +18,19 @@ const command: Command = {
       return;
     }
     const channel = ch as TextChannel;
-    if (
-      channel.parentId !== config.categoryId &&
-      channel.parentId !== config.backgroundCategoryId &&
-      channel.parentId !== config.archiveCategoryId
-    ) {
-      await replyV2(interaction, v2Error('❌ This channel is outside the active and archive categories.'), {
+    const session = getSession(channel.id);
+    if (!session) {
+      await replyV2(interaction, v2Error('❌ This channel has no session state.'), {
         ephemeral: true,
       });
       return;
     }
-    const session = getSession(channel.id);
-    if (!session) {
-      await replyV2(interaction, v2Error('❌ This channel has no session state.'), {
+    if (
+      session.status !== 'closed' &&
+      channel.parentId !== config.categoryId &&
+      channel.parentId !== config.backgroundCategoryId
+    ) {
+      await replyV2(interaction, v2Error('❌ This active session is outside the live categories.'), {
         ephemeral: true,
       });
       return;

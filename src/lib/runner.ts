@@ -34,6 +34,10 @@ import { customApiEnvironment } from './customApi';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SDKMessage = any;
 
+export function claudeExecutable(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLAUDE_BIN?.trim() || 'claude';
+}
+
 interface RunnerOpts {
   model?: string | null;
   onExit?: (channelId: string, crashed: boolean) => void;
@@ -271,11 +275,12 @@ export class Runner {
       ...customApiEnvironment(),
     };
 
+    const claudeBin = claudeExecutable();
     log.dim(
-      `Runner[${this.channelId}] spawn: claude ${args.join(' ')} (cwd=${this.cwd})`,
+      `Runner[${this.channelId}] spawn: ${claudeBin} ${args.join(' ')} (cwd=${this.cwd})`,
     );
 
-    this.child = spawn('claude', args, {
+    this.child = spawn(claudeBin, args, {
       cwd: this.cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -287,7 +292,7 @@ export class Runner {
       this.spawnFailed = true;
       const hint =
         nodeErr.code === 'ENOENT'
-          ? '\n-# The `claude` CLI was not found in PATH. Install Claude Code before using the bot.'
+          ? `\n-# Claude Code was not found at \`${claudeBin}\`. Re-run setup after installing the CLI.`
           : '';
       void this.renderer.postError(`Spawn claude failed: \`${err.message}\`${hint}`);
       this.onExit?.(this.channelId, true);

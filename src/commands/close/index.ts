@@ -43,6 +43,14 @@ const command: Command = {
     }
 
     await interaction.deferReply();
+    const moved = await moveToArchive(channel);
+    if (!moved) {
+      await replyV2(
+        interaction,
+        v2Error('❌ Unable to move the channel into the archive. The session remains active.'),
+      );
+      return;
+    }
     await bridge.drop(channel.id);
     closeSession(channel.id);
 
@@ -56,10 +64,8 @@ const command: Command = {
     }
 
     await renameSessionChannel(channel, '🔒 ');
-    const moved = await moveToArchive(channel);
 
-    const parts: string[] = ['✅ Session closed'];
-    if (moved) parts.push('channel moved to archive category');
+    const parts: string[] = ['✅ Session closed', 'channel moved to archive category'];
     if (cleaned > 0) parts.push(`removed ${cleaned} upload files`);
     await replyV2(interaction, v2Ok(parts.join(' · ') + '.'));
   },

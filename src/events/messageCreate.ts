@@ -26,7 +26,9 @@ const event: BotEvent<'messageCreate'> = {
     let sessionChannel: TextChannel | null = null;
     if (ch.type === ChannelType.GuildText) {
       const text = ch as TextChannel;
-      if (!isKnownSessionCategory(text.parentId, {
+      const mapped = getSession(text.id);
+      if (!mapped) return;
+      if (mapped.status !== 'closed' && !isKnownSessionCategory(text.parentId, {
         active: config.categoryId,
         background: config.backgroundCategoryId,
         archive: config.archiveCategoryId,

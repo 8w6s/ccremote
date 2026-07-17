@@ -45,6 +45,8 @@ On Windows, run:
 
 The installer can write `.env`, configure a custom Claude-compatible API, install dependencies, run checks, register slash commands, and create a user-level startup service. It asks before performing each optional action. When autostart is enabled, setup copies a production-only runtime into the current user's application-data directory; the service does not depend on the cloned repository remaining in place.
 
+Setup resolves the Claude Code executable to an absolute `CLAUDE_BIN` path before creating a daemon. This is necessary because systemd, LaunchAgent, and Task Scheduler do not necessarily inherit the PATH from an interactive terminal.
+
 To try the interface without changing files or starting services:
 
 ```bash
@@ -95,7 +97,7 @@ Useful optional values:
 
 | Variable | Purpose |
 |---|---|
-| `ARCHIVE_CATEGORY_ID` | Destination used by `/close` |
+| `ARCHIVE_CATEGORY_ID` | Primary destination used by `/close`; overflow categories are created when full |
 | `BACKGROUND_CATEGORY_ID` | Destination used by `/background` |
 | `DEFAULT_CWD` | Starting directory for new sessions |
 | `ALLOWED_CWD_PREFIXES` | Comma-separated roots accepted by `/cwd` and `/cd` |
@@ -111,7 +113,7 @@ ccRemote leaves any guild whose ID does not match `GUILD_ID`. This prevents an a
 
 Press **New Session** in the hub or run `/new`. The bot creates a mapped session channel. Send ordinary messages and attachments there; Claude starts lazily on the first valid prompt.
 
-`/close` archives the channel but keeps its mapping and JSONL. Sending another message or running `/open` makes it active again. `/delete` is the destructive operation and requires confirmation.
+`/close` first moves the channel into the archive and only then commits the closed state. If Discord's 50-channel category limit is reached, ccRemote creates numbered overflow categories automatically. Sending another message or running `/open` makes the session active again. `/delete` is the destructive operation and requires confirmation.
 
 Common commands:
 

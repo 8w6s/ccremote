@@ -10,12 +10,13 @@ import { readJsonlRecords } from '../lib/jsonlMirror';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { shouldScheduleAutomaticRecap } from '../lib/runner';
+import { claudeExecutable, shouldScheduleAutomaticRecap } from '../lib/runner';
 import { isAuthorizedGuild } from '../lib/guildGuard';
 import { isKnownSessionCategory, isLiveSessionCategory } from '../lib/sessionCategories';
 import { parseContextUsage } from '../lib/contextUsage';
 import { parseModelIds } from '../lib/customApi';
 import { Renderer, SessionChannel } from '../lib/renderer';
+import { nextArchiveOverflowName } from '../lib/hub';
 
 test('JSONL tool_use and tool_result normalize to matching IDs', () => {
   const use = normalizeJsonlEvent({
@@ -229,6 +230,19 @@ test('background category is live while unrelated categories stay rejected', () 
   assert.equal(isKnownSessionCategory('archive', categories), true);
   assert.equal(isKnownSessionCategory('unrelated', categories), false);
   assert.equal(isKnownSessionCategory(null, categories), false);
+});
+
+test('archive overflow names remain deterministic beyond Discord category capacity', () => {
+  assert.equal(nextArchiveOverflowName('close-session', []), 'close-session-overflow');
+  assert.equal(
+    nextArchiveOverflowName('close-session', ['close-session-overflow', 'close-session-overflow-2']),
+    'close-session-overflow-3',
+  );
+});
+
+test('Claude executable prefers the absolute daemon configuration', () => {
+  assert.equal(claudeExecutable({ CLAUDE_BIN: '/opt/claude/bin/claude' }), '/opt/claude/bin/claude');
+  assert.equal(claudeExecutable({ CLAUDE_BIN: '  ' }), 'claude');
 });
 
 test('context usage parser preserves distinct skill, context, and free-space symbols', () => {

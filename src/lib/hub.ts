@@ -16,6 +16,19 @@ import { allocateSequence, formatSequence } from './sequenceRegistry';
 
 const HUB_TITLE = '🟣 clauderemote';
 const HUB_MARKER = '<!-- clauderemote:hub -->';
+const DISCORD_CATEGORY_CHANNEL_LIMIT = 50;
+let archiveMoveTail: Promise<void> = Promise.resolve();
+
+export function nextArchiveOverflowName(baseName: string, existingNames: Iterable<string>): string {
+  const names = new Set([...existingNames].map((name) => name.toLowerCase()));
+  let suffix = 1;
+  let candidate = `${baseName}-overflow`;
+  while (names.has(candidate.toLowerCase())) {
+    suffix++;
+    candidate = `${baseName}-overflow-${suffix}`;
+  }
+  return candidate.slice(0, 100);
+}
 
 function buildHubContainer() {
   return v2Panel({
@@ -197,6 +210,18 @@ export async function moveToActive(channel: TextChannel): Promise<boolean> {
  * Move a closed session channel to ARCHIVE_CATEGORY_ID.
  */
 export async function moveToArchive(channel: TextChannel): Promise<boolean> {
+  const previous = archiveMoveTail;
+  let release!: () => void;
+  archiveMoveTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await moveToArchiveLocked(channel);
+  } finally {
+    release();
+  }
+}
+
+async function moveToArchiveLocked(channel: TextChannel): Promise<boolean> {
   const id = config.archiveCategoryId;
   if (!id) return false;
   const cat = await channel.client.channels.fetch(id).catch(() => null);
@@ -214,7 +239,38 @@ export async function moveToArchive(channel: TextChannel): Promise<boolean> {
     return false;
   }
   try {
-    await channel.setParent(target.id, { lockPermissions: false });
+    const guild = target.guild;
+    const escaped = target.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const overflowPattern = new RegExp(`^${escaped}-overflow(?:-(\\d+))?$`, 'i');
+    const candidates = [
+      target,
+      ...guild.channels.cache
+        .filter((candidate) =>
+          candidate.type === ChannelType.GuildCategory &&
+          candidate.id !== target.id &&
+          overflowPattern.test(candidate.name),
+        )
+        .map((candidate) => candidate as CategoryChannel),
+    ].sort((a, b) => {
+      if (a.id === target.id) return -1;
+      if (b.id === target.id) return 1;
+      return a.name.localeCompare(b.name, undefined, { numeric: true });
+    });
+
+    let destination = candidates.find((candidate) =>
+      channel.parentId === candidate.id || candidate.children.cache.size < DISCORD_CATEGORY_CHANNEL_LIMIT,
+    );
+    if (!destination) {
+      const name = nextArchiveOverflowName(target.name, candidates.map((candidate) => candidate.name));
+      destination = await guild.channels.create({
+        name,
+        type: ChannelType.GuildCategory,
+        reason: 'ccRemote archive overflow',
+      });
+    }
+    if (channel.parentId !== destination.id) {
+      await channel.setParent(destination.id, { lockPermissions: false });
+    }
     return true;
   } catch (err) {
     log.warn('moveToArchive failed:', err instanceof Error ? err.message : err);

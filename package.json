@@ -1,6 +1,6 @@
 {
   "name": "clauderemote",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "description": "Discord remote control plane and transcript mirror for Claude Code CLI",
   "main": "dist/index.js",
   "type": "commonjs",
