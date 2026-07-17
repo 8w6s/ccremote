@@ -8,17 +8,12 @@ import { loadCommands } from './loaders/commandLoader';
 import { loadEvents } from './loaders/eventLoader';
 import { acquireInstanceLock, releaseInstanceLock } from './lib/instanceLock';
 
-process.on('unhandledRejection', (reason) => {
-  console.error(chalk.red('❗ Unhandled rejection:'), reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error(chalk.red('❗ Uncaught exception:'), err);
-});
-
 let shuttingDown = false;
+let activeClient: import('discord.js').Client | null = null;
 async function gracefulShutdown(
   signal: string,
   client: import('discord.js').Client | null,
+  exitCode = 0,
 ): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -44,8 +39,17 @@ async function gracefulShutdown(
   } catch {
     /* ignore */
   }
-  process.exit(0);
+  process.exit(exitCode);
 }
+
+process.on('unhandledRejection', (reason) => {
+  console.error(chalk.red('❗ Unhandled rejection:'), reason);
+  void gracefulShutdown('unhandled rejection', activeClient, 1);
+});
+process.on('uncaughtException', (err) => {
+  console.error(chalk.red('❗ Uncaught exception:'), err);
+  void gracefulShutdown('uncaught exception', activeClient, 1);
+});
 
 async function main(): Promise<void> {
   console.log(chalk.bold.magenta('🟣 clauderemote'));
@@ -54,6 +58,7 @@ async function main(): Promise<void> {
   acquireInstanceLock();
 
   const client = createClient();
+  activeClient = client;
   loadCommands(client);
   loadEvents(client);
 
@@ -66,8 +71,8 @@ async function main(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.toLowerCase().includes('disallowed intents')) {
       console.error(chalk.red('❌ Discord rejected login because required privileged intents are disabled.'));
-      console.error(chalk.yellow('→ Mở https://discord.com/developers/applications → Bot của bạn → Bot'));
-      console.error(chalk.yellow('→ Bật "MESSAGE CONTENT INTENT" ở Privileged Gateway Intents.'));
+      console.error(chalk.yellow('→ Open https://discord.com/developers/applications → your application → Bot.'));
+      console.error(chalk.yellow('→ Enable MESSAGE CONTENT INTENT under Privileged Gateway Intents.'));
     }
     throw err;
   }
@@ -75,5 +80,5 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error(chalk.red('💥 Fatal error:'), err);
-  process.exit(1);
+  void gracefulShutdown('fatal startup error', activeClient, 1);
 });

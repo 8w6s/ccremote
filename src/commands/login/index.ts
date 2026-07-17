@@ -13,7 +13,11 @@ const command: Command = {
       .setName('code')
       .setDescription('OAuth code shown by the browser, when requested')
       .setRequired(false)
-      .setMaxLength(2000)) as unknown as SlashCommandBuilder,
+      .setMaxLength(2000))
+    .addBooleanOption((option) => option
+      .setName('confirm_stop')
+      .setDescription('Confirm stopping all active Claude runners before login')
+      .setRequired(false)) as unknown as SlashCommandBuilder,
   async execute(interaction) {
     if (interaction.user.id !== config.ownerId) {
       await replyV2(interaction, v2Error('Only the bot owner may change machine authentication.'), { ephemeral: true });
@@ -25,6 +29,19 @@ const command: Command = {
       await replyV2(
         interaction,
         accepted ? v2Ok('Login code submitted to Claude Code.') : v2Error('No active login flow is waiting for a code.'),
+        { ephemeral: true },
+      );
+      return;
+    }
+    const activeRunners = bridge.size();
+    const confirmed = interaction.options.getBoolean('confirm_stop') === true;
+    if (activeRunners > 0 && !confirmed) {
+      await replyV2(
+        interaction,
+        v2Error(
+          `⚠ Login must stop ${activeRunners} active Claude runner${activeRunners === 1 ? '' : 's'}. ` +
+          'Finish any in-progress turns, then rerun `/login confirm_stop:true` to continue.',
+        ),
         { ephemeral: true },
       );
       return;

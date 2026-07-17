@@ -1,5 +1,5 @@
 /**
- * Format tool_use header + result kiểu Claude Code CLI:
+ * Format tool_use headers and results in the Claude Code CLI style:
  *   ● ${icon} **${name}** \`${primaryParam}\`
  *     ⎿ ${resultSummary}
  *

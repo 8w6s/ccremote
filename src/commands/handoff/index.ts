@@ -30,7 +30,7 @@ const command: Command = {
         SendMessages: true,
         ReadMessageHistory: true,
       } as unknown as Partial<Record<keyof typeof PermissionsBitField.Flags, boolean>>);
-      await replyV2(interaction, v2Ok(`✅ Granted access to <@${user.id}>in this channel.`), {
+      await replyV2(interaction, v2Ok(`✅ Granted access to <@${user.id}> in this channel.`), {
         ephemeral: false,
       });
     } catch (err) {

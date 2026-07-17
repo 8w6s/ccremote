@@ -158,6 +158,8 @@ The command prints machine-readable JSON and returns distinct exit codes for mis
 
 `/customapi` is owner-only. It writes the endpoint, key, and model aliases into Claude Code's `settings.json`, with restrictive file permissions where the platform supports them. The values are also applied to subsequently spawned Claude processes.
 
+Machine-wide authentication and provider changes refuse to interrupt active Claude runners unless the owner explicitly supplies `confirm_stop:true`.
+
 `/context` also works with custom API endpoints. Claude Code reports the tokens currently occupying the model's actual context window; ccRemote parses that runtime output instead of querying the provider separately.
 
 ## Security notes

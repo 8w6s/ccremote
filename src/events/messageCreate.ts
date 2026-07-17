@@ -10,6 +10,20 @@ import { downloadAttachments, DownloadResult } from '../lib/attachments';
 import { isTeamMember } from '../lib/team';
 import { normalizeDiscordRequest } from '../lib/inputNormalizer';
 import { isKnownSessionCategory, isLiveSessionCategory } from '../lib/sessionCategories';
+import { log } from '../lib/logger';
+
+let warnedAboutMessageDeleteFailure = false;
+
+async function warnMessageDeleteFailure(message: import('discord.js').Message): Promise<void> {
+  if (warnedAboutMessageDeleteFailure) return;
+  warnedAboutMessageDeleteFailure = true;
+  const warning =
+    'ccRemote could not delete the original Discord prompt after echoing it. ' +
+    'Grant the bot Manage Messages in session channels to prevent duplicate timeline entries.';
+  log.warn(warning);
+  const owner = await message.client.users.fetch(config.ownerId).catch(() => null);
+  if (owner) await owner.send(`⚠ ${warning}`).catch(() => {});
+}
 
 const event: BotEvent<'messageCreate'> = {
   name: 'messageCreate',
@@ -173,7 +187,11 @@ const event: BotEvent<'messageCreate'> = {
       return;
     }
     await runner.push(normalized.text, inlineImages, message.author.id);
-    await message.delete().catch(() => {});
+    try {
+      await message.delete();
+    } catch {
+      await warnMessageDeleteFailure(message);
+    }
   },
 };
 

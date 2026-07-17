@@ -2,14 +2,13 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { watch, FSWatcher } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { Client, TextChannel, ChannelType } from 'discord.js';
 import { getSession, listActiveSessions, updateSessionMirrorOffset } from './state';
 import { bridge } from './bridge';
 import { Renderer } from './renderer';
 import { log } from './logger';
 import { normalizeJsonlEvent } from './interactionEvents';
+import { claudeSessionJsonlPath } from './claudePaths';
 
 /**
  * Mirror JSONL local → Discord.
@@ -17,10 +16,6 @@ import { normalizeJsonlEvent } from './interactionEvents';
  *
  * Dedup:
  */
-
-function encodeCwd(cwd: string): string {
-  return '-' + cwd.replace(/\//g, '-').replace(/^-+/, '');
-}
 
 interface WatcherEntry {
   channelId: string;
@@ -85,13 +80,7 @@ class JsonlMirror {
     for (const row of listActiveSessions()) {
       if (!row.sessionUuid) continue;
       if (row.syncing || row.syncState === 'running' || row.syncState === 'queued') continue;
-      const jsonlPath = join(
-        homedir(),
-        '.claude',
-        'projects',
-        encodeCwd(row.cwd),
-        `${row.sessionUuid}.jsonl`,
-      );
+      const jsonlPath = claudeSessionJsonlPath(row.cwd, row.sessionUuid);
       if (!existsSync(jsonlPath)) continue;
       void this.armWatcher(row.channelId, jsonlPath);
     }

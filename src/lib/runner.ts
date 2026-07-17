@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Renderer, TurnResult, TodoItem, SessionChannel } from './renderer';
 import { config } from '../config';
@@ -21,6 +21,7 @@ import { cleanupChannelApprovals } from './approvalRegistry';
 import { approvalMcpServer } from './approvalMcpServer';
 import { log } from './logger';
 import { customApiEnvironment } from './customApi';
+import { claudeExecutable as resolveClaudeExecutable, claudeSessionJsonlPath } from './claudePaths';
 
 /**
  * Runner manages a background Claude CLI process in print/stream-json mode.
@@ -28,14 +29,14 @@ import { customApiEnvironment } from './customApi';
  * - abort() → SIGINT process (Claude Code CLI handle interrupt)
  * - stop() → kill process, close stdin
  *
- * CLI event schema giống SDK (same runtime).
+ * The CLI event schema matches the SDK runtime.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SDKMessage = any;
 
 export function claudeExecutable(env: NodeJS.ProcessEnv = process.env): string {
-  return env.CLAUDE_BIN?.trim() || 'claude';
+  return resolveClaudeExecutable(env);
 }
 
 interface RunnerOpts {
@@ -45,6 +46,7 @@ interface RunnerOpts {
 
 export class Runner {
   static readonly AUTO_RECAP_IDLE_MS = 3 * 60_000;
+  private static readonly MAX_STDOUT_LINE_BYTES = 8 * 1024 * 1024;
   private channelId: string;
   private renderer: Renderer;
   private child: ChildProcess | null = null;
@@ -94,7 +96,7 @@ export class Runner {
   private respawnAttempts = 0;
   private static readonly MAX_RESPAWN_ATTEMPTS = 3;
 
-  /** MCP config JSON path (từ approvalMcpServer.registerChannel). Set async. */
+  /** MCP config JSON path returned asynchronously by registerChannel. */
   private mcpConfigPath: string | null = null;
   private manualSettingsPath: string | null = null;
 
@@ -168,11 +170,11 @@ export class Runner {
   }
 
   private jsonlPathFor(uuid: string): string {
-    const encoded = '-' + this.cwd.replace(/\//g, '-').replace(/^-+/, '');
-    return join(homedir(), '.claude', 'projects', encoded, `${uuid}.jsonl`);
+    return claudeSessionJsonlPath(this.cwd, uuid);
   }
 
   private spawnCli(): void {
+    const forkSource = this.forkFromUuid;
     const args = [
       '-p',
       '--input-format=stream-json',
@@ -239,8 +241,8 @@ export class Runner {
       args.push('--permission-prompt-tool', approvalMcpServer.getFullyQualifiedToolName());
     }
 
-    if (this.forkFromUuid) {
-      args.push('--resume', this.forkFromUuid, '--fork-session');
+    if (forkSource) {
+      args.push('--resume', forkSource, '--fork-session');
     } else if (this.claudeSessionId) {
       const jsonlPath = this.sessionJsonlPath();
       const hasJsonl = jsonlPath !== null && existsSync(jsonlPath);
@@ -266,6 +268,8 @@ export class Runner {
       args.push('--effort', this.effort === 'ultracode' ? 'max' : this.effort);
     }
 
+    // Precedence is intentional: custom API settings override configured
+    // values, configured values override inherited environment defaults.
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ANTHROPIC_BASE_URL: config.anthropicBaseUrl || process.env.ANTHROPIC_BASE_URL,
@@ -284,6 +288,16 @@ export class Runner {
       cwd: this.cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // A successfully spawned CLI has consumed this one-shot fork request.
+    // Clear both memory and durable state before any later respawn can fork
+    // repeatedly from the same source when init/API events never arrive.
+    this.child.once('spawn', () => {
+      if (forkSource && this.forkFromUuid === forkSource) {
+        this.forkFromUuid = null;
+        clearSessionForkSource(this.channelId);
+      }
     });
 
     this.child.on('error', (err) => {
@@ -364,10 +378,21 @@ export class Runner {
       this.stdoutBuf += chunk;
       let nl: number;
       while ((nl = this.stdoutBuf.indexOf('\n')) !== -1) {
+        if (nl > Runner.MAX_STDOUT_LINE_BYTES) {
+          this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
+          log.warn(`Runner[${this.channelId}] discarded an oversized stdout event (${nl} bytes)`);
+          void this.renderer.postError('Claude CLI emitted an oversized event; it was discarded to protect bot memory.');
+          continue;
+        }
         const line = this.stdoutBuf.slice(0, nl).trim();
         this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
         if (!line) continue;
         this.handleLine(line);
+      }
+      if (this.stdoutBuf.length > Runner.MAX_STDOUT_LINE_BYTES) {
+        log.warn(`Runner[${this.channelId}] terminated after an unterminated oversized stdout event`);
+        this.stdoutBuf = '';
+        this.child?.kill('SIGTERM');
       }
     });
 
@@ -447,9 +472,14 @@ export class Runner {
     this.renderer.startTyping();
 
     const goal = getSession(this.channelId)?.goal;
-    const goalAwareText = goal?.status === 'active' && !text.startsWith('/')
-      ? `<persistent-goal>Continue working toward this goal until genuinely complete: ${goal.objective}</persistent-goal>\n\n${text}`
-      : text;
+    let goalAwareText = text;
+    if (goal?.status === 'active' && !text.startsWith('/')) {
+      const boundary = randomUUID();
+      goalAwareText =
+        `-----BEGIN CCREMOTE GOAL ${boundary}-----\n` +
+        `Continue working toward this goal until genuinely complete: ${goal.objective}\n` +
+        `-----END CCREMOTE GOAL ${boundary}-----\n\n${text}`;
+    }
     // Local Claude Code 2.1.212 exposes low..max only. Ultracode remains a
     // clauderemote composite preset: max native effort + one-turn keyword.
     const promptText = this.effort === 'ultracode' && !text.startsWith('/')
@@ -570,7 +600,7 @@ export class Runner {
   private async handleEvent(evt: SDKMessage): Promise<void> {
     if (!evt || typeof evt !== 'object') return;
 
-    // Heartbeat: mọi event từ CLI reset stale-deadline của typing indicator.
+    // Every CLI event refreshes the typing indicator's stale deadline.
     this.renderer.bumpTyping();
 
 

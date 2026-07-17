@@ -5,7 +5,7 @@ import { createClient } from './client';
 import { loadCommands } from './loaders/commandLoader';
 
 /**
- * Chạy: npm run deploy
+ * Run with: npm run deploy
  */
 async function main(): Promise<void> {
   validateConfig();

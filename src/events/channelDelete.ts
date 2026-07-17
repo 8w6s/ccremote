@@ -1,7 +1,5 @@
 import { ChannelType, TextChannel, CategoryChannel } from 'discord.js';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { BotEvent } from '../types';
 import { config } from '../config';
 import {
@@ -14,10 +12,7 @@ import { bridge } from '../lib/bridge';
 import { log } from '../lib/logger';
 import { buildSessionHeader } from '../lib/renderer';
 import { V2_FLAGS } from '../lib/v2';
-
-function encodeCwd(cwd: string): string {
-  return '-' + cwd.replace(/\//g, '-').replace(/^-+/, '');
-}
+import { claudeSessionJsonlPath } from '../lib/claudePaths';
 
 /**
  *
@@ -45,13 +40,7 @@ const event: BotEvent<'channelDelete'> = {
       return;
     }
 
-    const jsonlPath = join(
-      homedir(),
-      '.claude',
-      'projects',
-      encodeCwd(row.cwd),
-      `${row.sessionUuid}.jsonl`,
-    );
+    const jsonlPath = claudeSessionJsonlPath(row.cwd, row.sessionUuid);
     if (!existsSync(jsonlPath)) {
       log.dim(
         `channelDelete: JSONL ${jsonlPath} is missing; soft-delete ${id}`,

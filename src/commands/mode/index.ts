@@ -6,7 +6,7 @@ import { bridge } from '../../lib/bridge';
 import { requireSessionChannel } from '../../lib/sessionGuard';
 
 // - bypassPermissions: --dangerously-skip-permissions
-// - auto: --permission-mode auto (Claude tự quyết safe vs risky)
+// - auto: --permission-mode auto (Claude classifies safe vs risky)
 // manual uses the explicit approval bridge for eligible tools.
 // - acceptEdits: --permission-mode acceptEdits
 // - plan: --permission-mode plan

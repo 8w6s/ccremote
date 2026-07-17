@@ -269,6 +269,8 @@ Long output is truncated in the card and may be attached as a file. Errors use r
 
 Permission requests originate from Claude Code's permission protocol and are correlated by channel plus tool-use/request ID. Approvals are serialized per channel so parallel tools cannot expose several actionable decisions out of order.
 
+The permission MCP server binds only to loopback and gives every registered channel a random per-registration endpoint nonce. Exact loopback-address matching rejects lookalike addresses, stale or tokenless endpoints return 404, request bodies are capped, and the generated MCP configuration file is mode `0600`. This prevents another local process from triggering Discord approval prompts merely by learning a channel ID.
+
 ### 11.1 Generic/Bash approval
 
 The control surface may contain:
@@ -440,7 +442,7 @@ In a session channel, shows sequence, channel ID, UUID, created/last-active time
 
 ### `/cwd path:<absolute path>`
 
-Canonicalizes symlinks, requires an existing directory inside `ALLOWED_CWD_PREFIXES`, safely stops/reconfigures the Runner, and starts a new session identity for the new project directory on the next prompt.
+Canonicalizes symlinks, requires an existing directory inside `ALLOWED_CWD_PREFIXES`, and starts a new session identity for the new project directory on the next prompt. During an active turn the mutation and Runner reconfiguration are deferred until completion, so the old turn cannot write into a newly reset transcript mapping. UUID, JSONL path, mirror offset, and sync progress are reset atomically.
 
 ### `/cd path:<absolute path>`
 
@@ -456,7 +458,7 @@ Persists the permission mode, updates the bot nickname when allowed, and reconfi
 
 ### `/effort level:<value>`
 
-Persists reasoning effort, synchronizes exactly one bot-member effort role, and reconfigures the Runner. `auto` restores the model default. `ultracode` may be implemented as a compatible composite preset when native runtime support is absent.
+Persists reasoning effort, synchronizes exactly one bot-member effort role, and reconfigures the Runner after any active turn finishes. User roles are never modified. `auto` restores the model default. `ultracode` may be implemented as a compatible composite preset when native runtime support is absent.
 
 ### `/clear confirm:<boolean>`
 
@@ -476,15 +478,15 @@ Requests Claude Code's native `/usage` view through the active Runner. Session c
 
 ### `/login code:<optional>`
 
-Owner-only machine authentication. Without `code`, stops live Runners and starts `claude auth login` with custom API environment variables removed. Stdout and stderr are captured privately until Claude emits an HTTPS OAuth URL; the URL is returned ephemerally and is never posted to the session channel or logs. If the browser displays a code because its callback cannot reach the machine, `/login code:<value>` writes that value to the active login process stdin without echoing it. Exactly one login process may exist, and it is terminated after ten minutes. A successful OAuth login deactivates—but does not erase—the stored custom gateway configuration.
+Owner-only machine authentication. Without `code`, starts `claude auth login` with custom API environment variables removed. If Runners exist, the command refuses to interrupt them until the owner explicitly supplies `confirm_stop:true`. Stdout and stderr are captured privately until Claude emits an HTTPS OAuth URL; the URL is returned ephemerally and is never posted to the session channel or logs. If the browser displays a code because its callback cannot reach the machine, `/login code:<value>` writes that value to the active login process stdin without echoing it. Exactly one login process may exist, and it is terminated after ten minutes. Authentication uses the setup-resolved `CLAUDE_BIN`, so daemon PATH differences do not break it. A successful OAuth login deactivates—but does not erase—the stored custom gateway configuration.
 
 ### `/logout`
 
-Owner-only machine-wide logout. Stops all Runners, cancels an active login process, runs `claude auth logout` with gateway credentials removed, applies a 30-second timeout, and preserves every Discord mapping and JSONL transcript. This affects the operating-system account used by all sessions, not only the channel where the command was invoked.
+Owner-only machine-wide logout. When Runners exist it requires `confirm_stop:true` before stopping them. It cancels an active login process, runs `claude auth logout` through `CLAUDE_BIN` with gateway credentials removed, applies a 30-second timeout, and preserves every Discord mapping and JSONL transcript. This affects the operating-system account used by all sessions, not only the channel where the command was invoked.
 
 ### `/customapi base_url:<url> api_key:<secret> model_ids:<aliases>`
 
-Owner-only gateway configuration. `model_ids` accepts either `opus=<id>,sonnet=<id>,haiku=<id>` or three comma-separated IDs in that order. The URL must be HTTP(S) and cannot contain embedded credentials. The key is never echoed or logged. Configuration is atomically merged into the `env` object in `~/.claude/settings.json`; unrelated Claude settings are preserved and the previous file is backed up as `settings.json.ccremote.bak`. The resulting file is mode `0600`. New Runners also receive the same values in their child environment, so persistent Claude configuration and immediate process configuration agree. Existing Runners are stopped gracefully so their next prompt resumes the same UUID with the new provider.
+Owner-only gateway configuration. `model_ids` accepts either `opus=<id>,sonnet=<id>,haiku=<id>` or three comma-separated IDs in that order. The URL must be HTTP(S) and cannot contain embedded credentials. The key is never echoed or logged. Configuration is atomically merged into the `env` object in `~/.claude/settings.json`; unrelated Claude settings are preserved and the previous file is backed up as `settings.json.ccremote.bak`. The resulting file is mode `0600`. New Runners also receive the same values in their child environment, so persistent Claude configuration and immediate process configuration agree. If Runners exist, `confirm_stop:true` is required before configuration is changed and those processes are stopped.
 
 Because Discord sends slash-command options to the application, the owner should still treat the channel, bot token, process memory, host account, and Discord account as privileged. Ephemeral output prevents ordinary channel disclosure but is not end-to-end secret storage.
 

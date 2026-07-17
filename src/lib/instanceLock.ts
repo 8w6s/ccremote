@@ -30,7 +30,15 @@ export function acquireInstanceLock(): void {
     if (err instanceof Error && err.message.startsWith('clauderemote is already running')) throw err;
   }
 
-  const fd = openSync(lockPath, 'wx', 0o600);
+  let fd: number;
+  try {
+    fd = openSync(lockPath, 'wx', 0o600);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error('clauderemote is already starting or running (instance lock is held)');
+    }
+    throw err;
+  }
   try {
     writeFileSync(fd, String(process.pid));
     owned = true;

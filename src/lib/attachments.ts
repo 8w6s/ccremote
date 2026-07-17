@@ -48,7 +48,6 @@ export interface DownloadResult {
 
 /**
  *
- * Bảo vệ:
  * Legacy upload cleanup is restricted to canonical allowed cwd roots.
  */
 export async function downloadAttachments(
@@ -158,6 +157,8 @@ export async function downloadAttachments(
             err instanceof Error ? err.message : err,
           );
           result.paths.push(outPath);
+          result.files.push({ name: safeName, path: outPath, bytes, kind: 'binary' });
+          log.dim(`Attachment stored after inline encoding fallback: ${outPath} (${bytes} bytes)`);
         }
       } else if (decodedText !== null && bytes <= config.maxInlineTextBytes) {
         result.inlineTexts.push({ name: safeName, text: decodedText, bytes });

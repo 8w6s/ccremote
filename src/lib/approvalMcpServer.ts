@@ -10,11 +10,10 @@ import { log } from './logger';
 
 /**
  *
- * - 1 HTTP server (bind 127.0.0.1:0) phục vụ path `/mcp/<channelId>`
+ * - One HTTP server bound to 127.0.0.1:0 serves authenticated channel paths.
  * The `approve` tool accepts tool name, input, and tool-use identity and returns
  *   {behavior: 'allow'|'deny', ...} theo PermissionPromptToolResultSchema
- * - Handler `onApprove(channelId, args)` do bot cung cấp → render Discord bubble,
- *   chờ user click, return decision.
+ * - The bot-provided handler renders a Discord prompt and waits for a decision.
  */
 
 export interface ApprovalRequestArgs {
@@ -39,6 +38,13 @@ export type ApprovalHandler = (
 
 interface ChannelServer {
   configPath: string | null;
+  token: string;
+}
+
+const MAX_MCP_BODY_BYTES = 1024 * 1024;
+
+export function isLoopbackAddress(remote: string): boolean {
+  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
 }
 
 class ApprovalMcpServer {
@@ -102,17 +108,18 @@ class ApprovalMcpServer {
       tmpdir(),
       `clauderemote-mcp-${channelId}-${randomUUID().slice(0, 8)}.json`,
     );
+    const token = randomUUID();
     const cfg = {
       mcpServers: {
         cr: {
           type: 'http',
-          url: `http://127.0.0.1:${this.port}/mcp/${channelId}`,
+          url: `http://127.0.0.1:${this.port}/mcp/${channelId}/${token}`,
         },
       },
     };
     writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
 
-    this.channels.set(channelId, { configPath });
+    this.channels.set(channelId, { configPath, token });
     return configPath;
   }
 
@@ -200,18 +207,14 @@ class ApprovalMcpServer {
     res: ServerResponse,
   ): Promise<void> {
     const remote = req.socket.remoteAddress ?? '';
-    if (
-      !remote.includes('127.0.0.1') &&
-      remote !== '::1' &&
-      remote !== '::ffff:127.0.0.1'
-    ) {
+    if (!isLoopbackAddress(remote)) {
       res.statusCode = 403;
       res.end('forbidden');
       return;
     }
 
     const url = req.url ?? '';
-    const match = url.match(/^\/mcp\/([^/?]+)(\?.*)?$/);
+    const match = url.match(/^\/mcp\/(\d+)\/([0-9a-f-]+)(\?.*)?$/i);
     if (!match) {
       res.statusCode = 404;
       res.end('not found');
@@ -223,7 +226,8 @@ class ApprovalMcpServer {
       res.end('bad channel id');
       return;
     }
-    if (!this.channels.has(channelId)) {
+    const registered = this.channels.get(channelId);
+    if (!registered || match[2] !== registered.token) {
       res.statusCode = 404;
       res.end('channel not registered');
       return;
@@ -232,8 +236,16 @@ class ApprovalMcpServer {
     let body: unknown = undefined;
     if (req.method === 'POST') {
       const chunks: Buffer[] = [];
+      let totalBytes = 0;
       for await (const chunk of req) {
-        chunks.push(chunk as Buffer);
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buffer.length;
+        if (totalBytes > MAX_MCP_BODY_BYTES) {
+          res.statusCode = 413;
+          res.end('request too large');
+          return;
+        }
+        chunks.push(buffer);
       }
       const raw = Buffer.concat(chunks).toString('utf-8');
       if (raw) {

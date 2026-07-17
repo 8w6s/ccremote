@@ -12,9 +12,9 @@ export async function fetchReplyContext(msg: Message): Promise<string | null> {
   const author = referenced.author?.username ?? 'user';
   let content = referenced.content?.trim() ?? '';
 
-  // Fallback: dump text từ components.
+  // Fallback: extract bounded text from components.
   if (!content && referenced.components?.length) {
-    // Best-effort: JSON.stringify rồi extract "content" fields.
+    // Best effort: stringify and extract content fields.
     try {
       const raw = JSON.stringify(referenced.components);
       const matches = raw.match(/"content":"([^"\\]|\\.){0,600}"/g) ?? [];

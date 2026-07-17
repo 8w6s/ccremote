@@ -38,11 +38,16 @@ const command: Command = {
     const name = interaction.options.getString('name', true);
     const modelVal = name === 'default' ? null : name;
     await interaction.deferReply();
-    await bridge.drop(channel.id);
-    updateSessionModel(channel.id, modelVal);
+    const switchTiming = await bridge.reconfigureAfterTurn(
+      channel.id,
+      () => updateSessionModel(channel.id, modelVal),
+    );
     await replyV2(
       interaction,
-      v2Ok(modelVal ? `✅ Model set = \`${modelVal}\`.` : '✅ Model reset to default.'),
+      v2Ok(
+        (modelVal ? `✅ Model set = \`${modelVal}\`.` : '✅ Model reset to default.') +
+        (switchTiming === 'deferred' ? ' The active turn will finish with its previous model.' : ''),
+      ),
     );
   },
 };

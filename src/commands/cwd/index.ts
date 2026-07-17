@@ -31,11 +31,17 @@ export async function changeSessionCwd(interaction: ChatInputCommandInteraction)
     }
 
     await interaction.deferReply();
-    await bridge.drop(channel.id);
-    updateSessionCwd(channel.id, resolved);
+    const switchTiming = await bridge.reconfigureAfterTurn(
+      channel.id,
+      () => updateSessionCwd(channel.id, resolved),
+    );
     await replyV2(
       interaction,
-      v2Ok(`✅ Working directory changed to \`${resolved}\`. The next prompt will use the new working directory.`),
+      v2Ok(
+        switchTiming === 'deferred'
+          ? `✅ Working directory queued as \`${resolved}\`. The active turn will finish in its original directory first.`
+          : `✅ Working directory changed to \`${resolved}\`. The next prompt will use the new working directory.`,
+      ),
     );
 }
 

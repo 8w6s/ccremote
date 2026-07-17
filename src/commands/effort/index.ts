@@ -1,8 +1,7 @@
-import { GuildMember, SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder } from 'discord.js';
 import { Command } from '../../types';
 import { bridge } from '../../lib/bridge';
 import {
-  clearEffortRoles,
   EFFORT_LEVELS,
   EffortLevel,
   EFFORT_PRESETS,
@@ -50,16 +49,15 @@ const command: Command = {
     }
 
     await interaction.deferReply();
-    await bridge.drop(channel.id);
-    updateSessionEffort(channel.id, level);
+    const switchTiming = await bridge.reconfigureAfterTurn(
+      channel.id,
+      () => updateSessionEffort(channel.id, level),
+    );
 
     let roleNote = '';
     const botMember = interaction.guild?.members.me;
     if (botMember) {
       try {
-        if (interaction.member instanceof GuildMember) {
-          await clearEffortRoles(interaction.member);
-        }
         await syncEffortRole(
           botMember,
           level,
@@ -75,7 +73,10 @@ const command: Command = {
     const description = level
       ? `✅ Effort = \`${level}\`.${level === 'ultracode' ? ' Composite preset: native `max` + `ultrathink`.' : ''}${roleNote}`
       : `✅ Effort reset to the model default.${roleNote}`;
-    await replyV2(interaction, v2Ok(description));
+    await replyV2(
+      interaction,
+      v2Ok(description + (switchTiming === 'deferred' ? ' The active turn keeps its previous effort.' : '')),
+    );
   },
 };
 

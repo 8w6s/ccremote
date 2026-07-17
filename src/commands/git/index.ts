@@ -19,8 +19,12 @@ function runGit(cwd: string, args: string[]): Promise<{ code: number; out: strin
   return new Promise((resolve) => {
     const child = spawn('git', args, { cwd });
     let out = '';
-    child.stdout.on('data', (d) => (out += d.toString()));
-    child.stderr.on('data', (d) => (out += d.toString()));
+    const append = (value: Buffer | string): void => {
+      if (out.length >= 1024 * 1024) return;
+      out = (out + value.toString()).slice(0, 1024 * 1024);
+    };
+    child.stdout.on('data', append);
+    child.stderr.on('data', append);
     child.on('close', (code) => resolve({ code: code ?? 0, out }));
     child.on('error', (err) => resolve({ code: -1, out: err.message }));
   });

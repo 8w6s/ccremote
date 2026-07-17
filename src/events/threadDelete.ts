@@ -12,7 +12,7 @@ const event: BotEvent<'threadDelete'> = {
     const row = getSession(thread.id);
     if (!row) return;
 
-    log.dim(`threadDelete: dọn session ${thread.id} (${thread.name ?? '?'})`);
+    log.dim(`threadDelete: clean up session ${thread.id} (${thread.name ?? '?'})`);
     await bridge.drop(thread.id).catch(() => {});
     deleteSession(thread.id);
     clearNotify(thread.id);

@@ -136,7 +136,7 @@ const command: Command = {
       });
       return;
     }
-    const prompts = readUserPrompts(session.cwd, session.sessionUuid);
+    const prompts = await readUserPrompts(session.cwd, session.sessionUuid);
     if (prompts.length === 0) {
       await replyV2(
         interaction,

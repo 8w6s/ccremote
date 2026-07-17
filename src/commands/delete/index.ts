@@ -1,7 +1,5 @@
 import { SlashCommandBuilder, ChannelType, TextChannel } from 'discord.js';
 import { unlinkSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { Command } from '../../types';
 import { v2Error, v2Ok, replyV2 } from '../../lib/v2';
 import { getSession, deleteSession, setSessionDeleting } from '../../lib/state';
@@ -10,12 +8,7 @@ import { cleanupUploads, cleanupTempAttachments } from '../../lib/attachments';
 import { jsonlMirror } from '../../lib/jsonlMirror';
 import { approvalMcpServer } from '../../lib/approvalMcpServer';
 import { log } from '../../lib/logger';
-
-/**
- */
-function encodeCwd(cwd: string): string {
-  return '-' + cwd.replace(/\//g, '-').replace(/^-+/, '');
-}
+import { claudeSessionJsonlPath } from '../../lib/claudePaths';
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -52,7 +45,7 @@ const command: Command = {
     jsonlMirror.removeWatcher(channel.id);
     await approvalMcpServer.unregisterChannel(channel.id).catch(() => {});
 
-    // 2. Dọn uploads.
+    // 2. Clean up uploads.
     let cleaned = 0;
     try {
       cleaned = cleanupUploads(session.cwd, channel.id);
@@ -65,13 +58,9 @@ const command: Command = {
     let jsonlDeleted = false;
     let jsonlDeleteError: string | null = null;
     if (session.sessionUuid) {
-      const jsonlPath = session.jsonlPath ?? join(
-        homedir(),
-        '.claude',
-        'projects',
-        encodeCwd(session.cwd),
-        `${session.sessionUuid}.jsonl`,
-      );
+      // Never trust a persisted path for destructive deletion. Recompute the
+      // only valid target from the mapped cwd and UUID.
+      const jsonlPath = claudeSessionJsonlPath(session.cwd, session.sessionUuid);
       try {
         if (existsSync(jsonlPath)) {
           unlinkSync(jsonlPath);

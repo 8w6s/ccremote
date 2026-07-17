@@ -9,7 +9,7 @@ const CRASH_WINDOW_MS = 60_000;
 const CRASH_THRESHOLD = 3;
 const CRASH_COOLDOWN_MS = 120_000;
 
-class Bridge {
+export class Bridge {
   private runners = new Map<string, Runner>();
   private starting = new Map<string, Promise<{ runner: Runner | null; reason?: string }>>();
   private budgetBuckets = new Map<string, number[]>(); // channelId → timestamps (ms)
@@ -131,15 +131,23 @@ class Bridge {
 
   /**
    */
-  async reconfigureAfterTurn(channelId: string): Promise<'deferred' | 'stopped'> {
+  async reconfigureAfterTurn(
+    channelId: string,
+    apply?: () => void,
+  ): Promise<'deferred' | 'stopped'> {
     const r = this.runners.get(channelId);
-    if (!r) return 'stopped';
+    if (!r) {
+      apply?.();
+      return 'stopped';
+    }
     if (r.isTurnActive()) {
       r.afterCurrentTurn(() => {
+        apply?.();
         void this.drop(channelId, false);
       });
       return 'deferred';
     }
+    apply?.();
     await this.drop(channelId, false);
     return 'stopped';
   }
@@ -156,7 +164,7 @@ class Bridge {
   }
 
   size(): number {
-    return this.runners.size;
+    return new Set([...this.runners.keys(), ...this.starting.keys()]).size;
   }
 
   abort(channelId: string): void {
@@ -179,7 +187,7 @@ class Bridge {
   }
 
   async stopAll(): Promise<void> {
-    const ids = [...this.runners.keys()];
+    const ids = [...new Set([...this.runners.keys(), ...this.starting.keys()])];
     for (const id of ids) {
       await this.drop(id);
     }

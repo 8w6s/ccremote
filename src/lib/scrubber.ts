@@ -47,9 +47,10 @@ const PATTERNS: Array<[RegExp, string]> = [
 ];
 
 /**
- * Init 1 lần ở module load.
+ * Initialize once at module load.
  */
 const LITERAL_SECRETS = new Set<string>();
+let literalSecretsPattern: RegExp | null = null;
 {
   const push = (v: string | undefined): void => {
     if (v && v.length >= 12) LITERAL_SECRETS.add(v);
@@ -64,7 +65,19 @@ function escapeRegExp(s: string): string {
 }
 
 export function registerSecret(secret: string | undefined): void {
-  if (secret && secret.length >= 12) LITERAL_SECRETS.add(secret);
+  if (secret && secret.length >= 12 && !LITERAL_SECRETS.has(secret)) {
+    LITERAL_SECRETS.add(secret);
+    literalSecretsPattern = null;
+  }
+}
+
+function getLiteralSecretsPattern(): RegExp | null {
+  if (LITERAL_SECRETS.size === 0) return null;
+  if (!literalSecretsPattern) {
+    literalSecretsPattern = new RegExp([...LITERAL_SECRETS].map(escapeRegExp).join('|'), 'g');
+  }
+  literalSecretsPattern.lastIndex = 0;
+  return literalSecretsPattern;
 }
 
 /**
@@ -75,10 +88,8 @@ export function escapeCodeFences(s: string): string {
 
 export function scrub(text: string): string {
   let s = text;
-  if (LITERAL_SECRETS.size > 0) {
-    const literal = new RegExp([...LITERAL_SECRETS].map(escapeRegExp).join('|'), 'g');
-    s = s.replace(literal, '[REDACTED:env-secret]');
-  }
+  const literal = getLiteralSecretsPattern();
+  if (literal) s = s.replace(literal, '[REDACTED:env-secret]');
   for (const [re, sub] of PATTERNS) {
     s = s.replace(re, sub);
   }

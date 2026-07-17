@@ -89,7 +89,7 @@ export async function ensureHub(client: Client): Promise<void> {
       (m) =>
         m.author.id === client.user?.id &&
         m.components?.length &&
-        JSON.stringify(m.components).includes('cr:new-session'),
+        JSON.stringify(m.components).includes(HUB_MARKER),
     );
     if (existing) {
       await existing.edit({
@@ -133,7 +133,7 @@ export async function createSessionChannel(
 
   const sequence = allocateSequence(config.guildId, `discord:${randomUUID()}`);
   const rawName = `🟣-${formatSequence(sequence)}`;
-  const name = rawName.toLowerCase().replace(/[^a-z0-9\-🟣]/g, '-').slice(0, 90);
+  const name = rawName.toLowerCase().replace(/[^a-z0-9\-🟣]/gu, '-').slice(0, 90);
 
   const channel = await guild.channels
     .create({

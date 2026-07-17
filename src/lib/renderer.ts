@@ -96,7 +96,12 @@ function sepSmall(divider = true): SeparatorBuilder {
 
 function safe(t: string, max = 4000): string {
   const s = scrub(t);
-  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  if (s.length <= max) return s;
+  let end = max - 1;
+  const previous = s.charCodeAt(end - 1);
+  const next = s.charCodeAt(end);
+  if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
+  return s.slice(0, end) + '…';
 }
 
 function isUnknownMessageError(error: unknown): boolean {

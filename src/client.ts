@@ -3,7 +3,7 @@ import { Command, ExtendedClient } from './types';
 
 /**
  * Intent:
- * - Guilds: bắt buộc (bao gồm thread events).
+ * - Guilds: required, including thread events.
  * - GuildMessages receives messageCreate events in session threads.
  * - GuildMembers (privileged) fetches member data for handoff and roles.
  *

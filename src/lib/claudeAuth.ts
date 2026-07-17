@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { setCustomApiActive } from './customApi';
+import { claudeExecutable } from './claudePaths';
 
 interface LoginProcess {
   child: ChildProcess;
@@ -36,7 +37,7 @@ export async function startClaudeLogin(): Promise<{
   }
   let resolveUrl!: (url: string | null) => void;
   const urlReady = new Promise<string | null>((resolve) => { resolveUrl = resolve; });
-  const child = spawn('claude', ['auth', 'login'], {
+  const child = spawn(claudeExecutable(), ['auth', 'login'], {
     env: oauthEnvironment(),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -86,7 +87,7 @@ export async function logoutClaude(): Promise<{ ok: boolean; detail: string }> {
     activeLogin = null;
   }
   return new Promise((resolve) => {
-    const child = spawn('claude', ['auth', 'logout'], {
+    const child = spawn(claudeExecutable(), ['auth', 'logout'], {
       env: oauthEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });

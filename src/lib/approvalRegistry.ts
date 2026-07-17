@@ -384,7 +384,7 @@ export function getApproval(requestId: string):
   };
 }
 
-/** Explain — return JSON dump của tool input. */
+/** Explain by returning a JSON representation of the tool input. */
 export async function explainApproval(requestId: string): Promise<string | null> {
   const p = pending.get(requestId);
   if (!p) return null;

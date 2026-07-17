@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, copyFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { claudeSessionJsonlPath } from './claudePaths';
 
 /**
  * Durable clauderemote session state.
@@ -8,7 +9,7 @@ import { homedir } from 'node:os';
  * File: $XDG_STATE_HOME/clauderemote/channels.json (fallback ~/.local/state)
  * Schema: { channelId: { sessionUuid?, cwd, status, createdAt, lastActiveAt, turnCount } }
  *
- * chuẩn của Claude Code CLI ở ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl.
+ * Claude Code CLI stores transcripts at ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl.
  * The bot stores identity and lifecycle metadata, not transcript content.
  */
 
@@ -312,8 +313,7 @@ export function updateSessionUuid(channelId: string, uuid: string): void {
   const s = store[channelId];
   if (!s) return;
   s.sessionUuid = uuid;
-  const encoded = '-' + s.cwd.replace(/\//g, '-').replace(/^-+/, '');
-  s.jsonlPath = join(homedir(), '.claude', 'projects', encoded, `${uuid}.jsonl`);
+  s.jsonlPath = claudeSessionJsonlPath(s.cwd, uuid);
   s.mappingHealth = 'healthy';
   s.lastActiveAt = Date.now();
   saveStore();
@@ -350,14 +350,25 @@ export function touchSession(channelId: string): void {
   saveStore();
 }
 
+export function resetSessionForCwdChange(session: SessionState, cwd: string): void {
+  session.cwd = cwd;
+  session.lastActiveAt = Date.now();
+  session.sessionUuid = null;
+  session.jsonlPath = null;
+  session.mirrorOffset = 0;
+  session.syncCheckpoint = 0;
+  session.syncTotal = 0;
+  session.syncState = 'idle';
+  session.syncing = false;
+  session.mappingHealth = 'healthy';
+}
+
 export function updateSessionCwd(channelId: string, cwd: string): void {
   const store = loadStore();
   const s = store[channelId];
   if (!s) return;
-  s.cwd = cwd;
-  s.lastActiveAt = Date.now();
-  // cwd change resets Claude session UUID: JSONL lives under encoded cwd path
-  s.sessionUuid = null;
+  // cwd changes rotate the complete transcript identity, not only its UUID.
+  resetSessionForCwdChange(s, cwd);
   saveStore();
 }
 
@@ -533,7 +544,7 @@ export function migrateSessionChannel(
   const store = loadStore();
   const s = store[oldChannelId];
   if (!s) return null;
-  // Clear cờ soft-delete + reopen status.
+  // Clear the soft-delete flag and reopen the session.
   s.channelDeleted = false;
   s.status = 'active';
   s.lastActiveAt = Date.now();
