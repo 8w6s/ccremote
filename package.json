@@ -1,0 +1,48 @@
+{
+  "name": "clauderemote",
+  "version": "0.6.0",
+  "description": "Discord remote control plane and transcript mirror for Claude Code CLI",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "bin": { "clauderemote": "dist/cli.js" },
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "deploy": "ts-node src/deploy-commands.ts",
+    "test": "ts-node src/test-loader.ts",
+    "test:approval": "ts-node src/test-approval-mcp.ts",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "node --test -r ts-node/register src/tests/*.test.ts",
+    "cli": "ts-node src/cli.ts",
+    "check": "npm run typecheck && npm run test:unit && npm test && npm run build"
+  },
+  "engines": { "node": ">=22" },
+  "files": ["dist", "README.md", "DOCS.md", "LICENSE", ".env.example"],
+  "keywords": [
+    "discord",
+    "bot",
+    "claude",
+    "claude-code",
+    "remote",
+    "bridge"
+  ],
+  "author": "8w6s",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/8w6s/clauderemote.git" },
+  "bugs": { "url": "https://github.com/8w6s/clauderemote/issues" },
+  "homepage": "https://github.com/8w6s/clauderemote#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "chalk": "^4.1.2",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.6.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
