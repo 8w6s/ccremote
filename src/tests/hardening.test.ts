@@ -226,4 +226,8 @@ test('logger output scrubs secrets in strings, errors, and structured values', (
   assert.doesNotMatch(sanitizeLogValue(`failed with ${secret}`), /sk-ant-/);
   assert.doesNotMatch(sanitizeLogValue(new Error(`failed with ${secret}`)), /sk-ant-/);
   assert.doesNotMatch(sanitizeLogValue({ authorization: `Bearer ${secret}` }), /sk-ant-/);
+  const callback = 'https://discord.com/api/v10/interactions/1234567890/aVeryLongInteractionToken_123456789/callback';
+  const sanitized = sanitizeLogValue(new Error(callback));
+  assert.doesNotMatch(sanitized, /aVeryLongInteractionToken/);
+  assert.match(sanitized, /REDACTED:interaction-token/);
 });

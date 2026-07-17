@@ -2,6 +2,8 @@
  * Supports an immediate force-flush at end of turn.
  *
  */
+import { log } from './logger';
+
 export class Coalescer {
   private timer: NodeJS.Timeout | null = null;
   private pending = false;
@@ -52,7 +54,7 @@ export class Coalescer {
       try {
         await this.fn();
       } catch (err) {
-        console.error('Coalescer flush error:', err);
+        log.err('Coalescer flush error:', err);
       }
     })();
     try {

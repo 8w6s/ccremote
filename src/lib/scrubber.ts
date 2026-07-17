@@ -33,6 +33,8 @@ const PATTERNS: Array<[RegExp, string]> = [
   [/\bpplx-[A-Za-z0-9]{20,}/g, '[REDACTED:pplx]'],
   // Discord bot token — 3 base64url segments split by `.`
   [/\b[MN][A-Za-z0-9_-]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}/g, '[REDACTED:discord-token]'],
+  // Discord interaction callback URLs contain a short-lived webhook token.
+  [/(\/interactions\/\d+\/)[A-Za-z0-9_-]{20,}(\/callback)/g, '$1[REDACTED:interaction-token]$2'],
   // JWT — header.payload.signature (base64url).
   [/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, '[REDACTED:jwt]'],
   [/-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----/g, '[REDACTED:private-key]'],

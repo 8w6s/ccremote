@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { config, validateConfig } from './config';
 import { createClient } from './client';
 import { loadCommands } from './loaders/commandLoader';
+import { log } from './lib/logger';
 
 /**
  * Run with: npm run deploy
@@ -26,6 +27,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(chalk.red('✗ Deploy fail:'), err);
+  log.err('Deploy failed:', err);
   process.exit(1);
 });

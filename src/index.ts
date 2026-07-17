@@ -7,6 +7,7 @@ import { approvalMcpServer } from './lib/approvalMcpServer';
 import { loadCommands } from './loaders/commandLoader';
 import { loadEvents } from './loaders/eventLoader';
 import { acquireInstanceLock, releaseInstanceLock } from './lib/instanceLock';
+import { log } from './lib/logger';
 
 let shuttingDown = false;
 let activeClient: import('discord.js').Client | null = null;
@@ -27,10 +28,10 @@ async function gracefulShutdown(
 
   try {
     await bridge.stopAll().catch((err) => {
-      console.error(chalk.red('bridge.stopAll error:'), err);
+      log.err('bridge.stopAll error:', err);
     });
     await approvalMcpServer.stop().catch((err) => {
-      console.error(chalk.red('approvalMcpServer.stop error:'), err);
+      log.err('approvalMcpServer.stop error:', err);
     });
     if (client) {
       await client.destroy();
@@ -43,11 +44,11 @@ async function gracefulShutdown(
 }
 
 process.on('unhandledRejection', (reason) => {
-  console.error(chalk.red('❗ Unhandled rejection:'), reason);
+  log.err('❗ Unhandled rejection:', reason);
   void gracefulShutdown('unhandled rejection', activeClient, 1);
 });
 process.on('uncaughtException', (err) => {
-  console.error(chalk.red('❗ Uncaught exception:'), err);
+  log.err('❗ Uncaught exception:', err);
   void gracefulShutdown('uncaught exception', activeClient, 1);
 });
 
@@ -79,6 +80,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(chalk.red('💥 Fatal error:'), err);
+  log.err('💥 Fatal error:', err);
   void gracefulShutdown('fatal startup error', activeClient, 1);
 });
