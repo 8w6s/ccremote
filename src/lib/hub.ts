@@ -20,14 +20,21 @@ const DISCORD_CATEGORY_CHANNEL_LIMIT = 50;
 let archiveMoveTail: Promise<void> = Promise.resolve();
 
 export function nextArchiveOverflowName(baseName: string, existingNames: Iterable<string>): string {
-  const names = new Set([...existingNames].map((name) => name.toLowerCase()));
-  let suffix = 1;
-  let candidate = `${baseName}-overflow`;
-  while (names.has(candidate.toLowerCase())) {
-    suffix++;
-    candidate = `${baseName}-overflow-${suffix}`;
+  const prefix = `${baseName}-overflow`;
+  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const numbered = new RegExp(`^${escapedPrefix}[ -](\\d+)$`, 'i');
+  const used = new Set<number>();
+  for (const name of existingNames) {
+    if (name.toLowerCase() === prefix.toLowerCase()) {
+      used.add(1); // Legacy unsuffixed overflow is treated as 0001.
+      continue;
+    }
+    const match = name.match(numbered);
+    if (match) used.add(Number(match[1]));
   }
-  return candidate.slice(0, 100);
+  let index = 1;
+  while (used.has(index)) index++;
+  return `${prefix} ${String(index).padStart(4, '0')}`.slice(0, 100);
 }
 
 function buildHubContainer() {
@@ -241,7 +248,7 @@ async function moveToArchiveLocked(channel: TextChannel): Promise<boolean> {
   try {
     const guild = target.guild;
     const escaped = target.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const overflowPattern = new RegExp(`^${escaped}-overflow(?:-(\\d+))?$`, 'i');
+    const overflowPattern = new RegExp(`^${escaped}-overflow(?:[ -](\\d+))?$`, 'i');
     const candidates = [
       target,
       ...guild.channels.cache
@@ -256,6 +263,17 @@ async function moveToArchiveLocked(channel: TextChannel): Promise<boolean> {
       if (b.id === target.id) return 1;
       return a.name.localeCompare(b.name, undefined, { numeric: true });
     });
+
+    // Migrate the pre-1.0 unsuffixed category without moving its children.
+    const legacyName = `${target.name}-overflow`;
+    const legacy = candidates.find((candidate) => candidate.name.toLowerCase() === legacyName.toLowerCase());
+    const firstNumberedName = `${legacyName} 0001`;
+    const hasFirstNumbered = candidates.some(
+      (candidate) => candidate.name.toLowerCase() === firstNumberedName.toLowerCase(),
+    );
+    if (legacy && !hasFirstNumbered) {
+      await legacy.setName(firstNumberedName, 'Normalize ccRemote archive overflow numbering');
+    }
 
     let destination = candidates.find((candidate) =>
       channel.parentId === candidate.id || candidate.children.cache.size < DISCORD_CATEGORY_CHANNEL_LIMIT,

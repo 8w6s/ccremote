@@ -113,7 +113,7 @@ ccRemote leaves any guild whose ID does not match `GUILD_ID`. This prevents an a
 
 Press **New Session** in the hub or run `/new`. The bot creates a mapped session channel. Send ordinary messages and attachments there; Claude starts lazily on the first valid prompt.
 
-`/close` first moves the channel into the archive and only then commits the closed state. If Discord's 50-channel category limit is reached, ccRemote creates numbered overflow categories automatically. Sending another message or running `/open` makes the session active again. `/delete` is the destructive operation and requires confirmation.
+`/close` first moves the channel into the archive and only then commits the closed state. If Discord's 50-channel category limit is reached, ccRemote creates `close session-overflow 0001`, `0002`, `0003`, and further categories automatically. Sending another message or running `/open` makes the session active again. `/delete` is the destructive operation and requires confirmation.
 
 Common commands:
 

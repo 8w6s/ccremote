@@ -233,10 +233,17 @@ test('background category is live while unrelated categories stay rejected', () 
 });
 
 test('archive overflow names remain deterministic beyond Discord category capacity', () => {
-  assert.equal(nextArchiveOverflowName('close-session', []), 'close-session-overflow');
+  assert.equal(nextArchiveOverflowName('close session', []), 'close session-overflow 0001');
   assert.equal(
-    nextArchiveOverflowName('close-session', ['close-session-overflow', 'close-session-overflow-2']),
-    'close-session-overflow-3',
+    nextArchiveOverflowName('close session', [
+      'close session-overflow 0001',
+      'close session-overflow 0002',
+    ]),
+    'close session-overflow 0003',
+  );
+  assert.equal(
+    nextArchiveOverflowName('close session', ['close session-overflow']),
+    'close session-overflow 0002',
   );
 });
 
